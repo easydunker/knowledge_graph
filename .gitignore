@@ -1,0 +1,10 @@
+# Keep source PDFs local by default.
+raw/papers/*.pdf
+raw/processed/*.pdf
+raw/failed/*.pdf
+
+# Common local/editor noise.
+.DS_Store
+.obsidian/workspace*.json
+__pycache__/
+*.pyc
