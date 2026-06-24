@@ -90,6 +90,7 @@ python3 scripts/evaluate_public_pdfs.py --python /path/to/python-with-pypdf
 
 - [Knowledge base design](docs/knowledge-base-design.md)
 - [Obsidian v1 blueprint](docs/obsidian-v1-blueprint.md)
+- [Installation guideline](docs/installation-guideline.md)
 - [Public PDF quality evaluation](docs/public-pdf-quality-evaluation.md)
 
 ## V1 Architecture
