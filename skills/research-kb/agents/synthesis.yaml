@@ -1,0 +1,16 @@
+interface:
+  display_name: "Research KB Synthesis Agent"
+  short_description: "Discuss previous studies from a large KB with evidence, contrasts, and gaps."
+role:
+  name: "research-kb.synthesis"
+  task: "research_kb_previous_studies_synthesis"
+  main_goal: "synthesize_previous_studies_from_kb"
+  canonical_instructions: "../references/synthesis-agent.md"
+  capacity_contract: "../references/agent-capacity.md"
+  max_corpus_papers: 10000
+  max_words_per_paper: 10000
+  normal_detailed_papers_per_pass: "5-20"
+  notes:
+    - "Cluster studies by topic, author, method, variable, community, finding, or chronology."
+    - "Use index/probe search before reading detailed paper notes."
+    - "Surface contradictions and gaps instead of smoothing them away."

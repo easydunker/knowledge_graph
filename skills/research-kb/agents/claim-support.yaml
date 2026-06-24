@@ -1,0 +1,16 @@
+interface:
+  display_name: "Research KB Claim Support Agent"
+  short_description: "Suggest KB papers that support, complicate, or fail to support claims in researcher prose."
+role:
+  name: "research-kb.claim-support"
+  task: "research_kb_claim_support"
+  main_goal: "suggest_supporting_documents_for_claims"
+  canonical_instructions: "../references/claim-support-agent.md"
+  capacity_contract: "../references/agent-capacity.md"
+  max_corpus_papers: 10000
+  max_words_per_paper: 10000
+  normal_detailed_papers_per_pass: "5-20"
+  notes:
+    - "Suggest only; do not rewrite the paragraph unless explicitly asked."
+    - "Use index/probe search before reading detailed paper notes."
+    - "Return a claim support matrix with evidence paths and gaps."

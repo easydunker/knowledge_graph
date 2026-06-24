@@ -19,6 +19,7 @@ The aim is not to automate scholarship. The aim is to make the researcher's cura
 ```text
 raw/papers/
   -> PDF extraction
+  -> bundled paper process agent understanding/summarization from extracted text
   -> papers/<paper_id>.md
   -> linked Obsidian notes
   -> agent search/synthesis workflows
@@ -60,11 +61,21 @@ Agents may not:
 
 ## 4. Vault Layout
 
+The installed Codex skill is not the vault. The skill is reusable tooling, while the vault is a user-selected content root opened in Obsidian. A user may have many vaults using the same installed skill.
+
+Agents should always target the selected vault path with `--vault /path/to/user-vault` and should not store user PDFs, notes, or `.research-kb/` state inside the installed skill directory.
+
+Canonical templates should ship with the installed skill and be copied into the selected vault by `init`. The vault's `templates/` folder is then the researcher-editable override layer.
+
 ```text
 research-kb/
   index.md
   log.md
   AGENTS.md
+
+  .research-kb/
+    config.yaml
+    index.json
 
   raw/
     papers/
@@ -102,6 +113,9 @@ Folder roles:
 | `syntheses/` | Cross-paper literature syntheses |
 | `templates/` | Reusable Obsidian note templates |
 | `plugins/` | Optional integrations, not v1 core |
+| `.research-kb/` | Generated tool state, including the machine index cache and JSONL search probe indexes |
+
+`index.md` is the human-facing vault front door. `.research-kb/index.json` and `.research-kb/search/*.jsonl` are regenerated from Markdown notes for agents and CLI tools; they are not a second source of truth. Large-vault query agents should search the JSONL probe indexes rather than loading all summaries into context.
 
 ## 5. Naming Rules
 
@@ -580,11 +594,15 @@ When the agent processes raw PDFs:
 6. Infer title, authors, year, DOI, and publication when possible.
 7. Generate `paper_id`.
 8. Create `papers/<paper_id>.md` from `templates/paper.md`.
-9. Draft structured sections.
-10. Extract candidate graph edges into the paper mini graph.
-11. Create or propose links to concepts, variables, methods, and communities.
-12. Move the PDF to `raw/processed/` or leave it in place and record status.
-13. Append a short entry to `log.md`.
+9. Export a model-agnostic paper-analysis task with extracted text, the expected JSON schema, `agent: research-kb.paper-process`, and a result path.
+10. In Codex, spawn one worker subagent per task using the bundled paper process agent instructions to understand and summarize the paper from extracted text only.
+11. Apply the returned JSON to draft structured sections with summary, research question, data, methods, findings, limitations, quotes, and evidence anchors.
+12. Extract candidate graph edges into the paper mini graph.
+13. Create or propose links to concepts, variables, methods, and communities.
+14. Move the PDF to `raw/processed/` or leave it in place and record status.
+15. Append a short entry to `log.md`.
+
+The CLI should not call a model provider directly. Model-assisted paper understanding belongs to the surrounding agent harness, using `agent-context` and `apply-analysis` as the interchange format. In Codex, the skill should use the bundled `research-kb.paper-process` worker instructions by default. Deterministic `enrich` remains available as an offline fallback.
 
 If extraction fails:
 
@@ -767,6 +785,7 @@ The vault should include an `AGENTS.md` with rules like:
 
 - Keep paper notes source-grounded.
 - Always record `raw_pdf_path` and `pdf_sha256`.
+- Use agent/subagent paper understanding when available, but only from extracted PDF text.
 - Mark uncertain metadata and uncertain summaries.
 - Preserve researcher-reviewed content.
 
@@ -786,6 +805,7 @@ The vault should include an `AGENTS.md` with rules like:
 
 - Append important actions to `log.md`.
 - Keep `index.md` useful and brief.
+- Keep machine-maintained state under `.research-kb/`; regenerate `.research-kb/index.json` from notes instead of hand-editing it.
 ```
 
 ## 12. Zotero Plugin

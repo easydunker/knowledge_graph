@@ -1,0 +1,114 @@
+# Research KB Workflows
+
+## Vault Selection
+
+1. Use a user-selected Obsidian vault root for all content.
+2. Do not store user PDFs, notes, or `.research-kb/` state in the installed skill directory.
+3. If the user has not provided a vault path, ask for one before bootstrapping.
+4. Bootstrap the selected vault with:
+
+   ```bash
+   python3 <skill-dir>/scripts/research_kb.py --vault /path/to/user-selected-vault init
+   ```
+
+`init` copies canonical templates from `<skill-dir>/templates/` into `/path/to/user-selected-vault/templates/`. Existing vault templates are treated as researcher customization and are not overwritten unless `init --force` is used. Note generation resolves templates in this order: vault template, installed skill template, embedded fallback.
+
+## Intake and Processing
+
+1. Confirm the PDFs are already in `raw/papers/`.
+2. Run `python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault process`.
+3. Run `python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault agent-context`.
+4. When Codex subagents are available, spawn one worker per `.research-kb/agent-tasks/*.agent-task.json` file. Instruct the worker to act as `research-kb.paper-process`, read `references/paper-process-agent.md`, analyze only the task's extracted text, and write one result JSON to the task's `result_path`.
+5. If subagents are unavailable, the current agent may perform the same `research-kb.paper-process` contract manually, or another model/human may write the same JSON.
+6. Run `python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault apply-analysis .research-kb/agent-results/*.json --create-nodes`.
+7. Inspect generated paper notes in `papers/`.
+8. Improve draft notes from the PDF and extracted text only:
+   - summary
+   - research question
+   - data and participants
+   - variables and social factors
+   - methods and measures
+   - key findings
+   - limitations
+   - useful quotes
+9. Add typed wikilinks to existing nodes when substantively relevant.
+10. Create new node notes only after searching for duplicates; use `status: candidate` when uncertain.
+11. Append important actions to `log.md` and keep `index.md` brief.
+12. Let the CLI regenerate `.research-kb/index.json` and `.research-kb/search/*.jsonl`; do not hand-edit generated machine caches.
+
+The processor is deterministic and model-agnostic. It hashes PDFs, extracts metadata/text, creates conservative draft notes, and skips PDFs already represented by `pdf_sha256`.
+
+The model-assisted understanding step is outside the CLI. `agent-context` exports a portable task with instructions, existing metadata, known graph nodes, extracted PDF text, an expected JSON schema, the `research-kb.paper-process` agent name, and a target `result_path`. Any harness can satisfy that contract: Codex subagents, another skill, a local model, a remote model gateway, or a human-edited JSON file.
+
+For real research PDFs, prefer running with a Python environment that has `pypdf` installed. With `pypdf`, the extractor reads full-paper text up to a high safety cap and `agent-context` emits an agent excerpt controlled by `--max-chars`. Without `pypdf`, the fallback extractor is intentionally conservative: it may create useful hash-tracked draft notes, but title, author, and text fields may be incomplete and should stay marked as uncertain.
+
+`apply-analysis` is conservative. It applies source-grounded sections only from returned JSON, preserves researcher-reviewed notes unless `--force` is passed, marks inferred links as `#candidate`, creates `status: candidate` nodes only with `--create-nodes`, and leaves paper notes in review status.
+
+`enrich --create-nodes` remains a deterministic fallback that uses text heuristics only. Use it for regression tests, offline smoke tests, or when no agent/subagent reasoning is available.
+
+## Query: Idea to Papers and Directions
+
+1. Run:
+
+   ```bash
+   python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault query "idea text" --mode idea
+   ```
+
+2. Read the returned paper notes and any matched concept, variable, method, community, or synthesis notes.
+3. Prefer typed evidence paths over keyword-only matches.
+4. Answer with relevant KB papers, why each matters, evidence paths, possible directions, and gaps.
+5. If the answer is useful and should compound, save it as a question or synthesis note:
+
+   ```bash
+   python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault query "idea text" --mode idea --save questions/short-slug.md
+   ```
+
+For topic, author, title, DOI, year, method, variable, or other clear clue searches, a Codex harness may delegate to `research-kb.query`. The query agent should support vaults up to 10,000 papers, each up to about 10,000 words, by using the index and query outputs before reading detailed paper notes. It should return evidence packets, not just prose.
+
+## Query: Draft to Supporting Citations
+
+1. Run `query --mode draft` with the paragraph or claim.
+2. Identify claims that are supported, complicated, contradicted, or missing support in the current KB.
+3. Recommend only citations represented by existing paper notes.
+4. Flag overbroad claims rather than smoothing over weak evidence.
+
+For paragraph or multi-paragraph enrichment, a Codex harness may delegate to `research-kb.claim-support`. It must suggest only: split the prose into claims, suggest supporting or complicating KB papers, report missing support, and avoid rewriting unless the user explicitly asks.
+
+## Query: Question to Relevant Papers
+
+1. Run `query --mode question`.
+2. Read matched papers and synthesis notes.
+3. Provide a short answer from the current KB only.
+4. State what the KB does not yet cover.
+
+For "discuss previous studies" requests, a Codex harness may delegate to `research-kb.synthesis`. It should search the corpus-scale index first, select a bounded detailed subset for synthesis, compare papers by author/topic/method/variable/community/finding as appropriate, and report coverage limits.
+
+## Review and Fix
+
+Use:
+
+```bash
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault review
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault lint
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault lint --fix
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault index
+```
+
+`review` lists paper notes still marked `needs_review` or `agent_draft`.
+
+`lint` checks for missing folders, unprocessed PDFs, missing `raw_pdf_path`, missing `pdf_sha256`, missing title/year/authors, missing summaries, missing graph links, duplicate papers, broken wikilinks, orphan nodes, and synthesis notes without paper links.
+
+`index` refreshes root `index.md`, `.research-kb/index.json`, and the JSONL probe indexes under `.research-kb/search/`.
+
+`lint --fix` creates missing scaffold files and refreshes both indexes. Add `--create-missing-linked-notes` only when it is acceptable to create candidate stubs for broken wikilinks.
+
+## Creating Nodes
+
+Use `new-node` for a clean template:
+
+```bash
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault new-node concept "Indexicality"
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault new-node variable "Mandarin rhotics" --status candidate
+```
+
+Before creating a node, search filenames, aliases, headings, and full text. Do not create duplicate pages.

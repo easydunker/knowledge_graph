@@ -1,0 +1,16 @@
+# Research KB tool config
+
+schema_version: 1
+human_index: index.md
+machine_state_dir: .research-kb
+machine_index: .research-kb/index.json
+raw_pdf_dir: raw/papers
+source_of_truth: markdown_notes
+node_folders:
+  paper: papers
+  concept: concepts
+  variable: variables
+  method: methods
+  community: communities
+  research_question: questions
+  synthesis: syntheses

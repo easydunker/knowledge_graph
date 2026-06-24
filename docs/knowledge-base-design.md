@@ -22,6 +22,8 @@ Core decisions:
 - Zotero is not part of the v1 core; it should be designed as an optional plugin.
 - No SQLite, vector database, OpenAlex, or Semantic Scholar is required for the core v1.
 - The graph is expressed through Markdown links, frontmatter, tags, aliases, and relation-style bullets.
+- Paper processing is model-agnostic in the CLI. Paper understanding is an agent/subagent contract: export extracted-text tasks, let any harness model produce structured JSON, then apply it back to Markdown.
+- Deterministic extraction/enrichment remains available as an offline fallback and regression-test mode.
 
 This keeps v1 local, inspectable, and easy to test with real papers.
 
@@ -93,6 +95,8 @@ Graph structure lives in Markdown:
 - aliases
 - relation sections
 - recurring relation-style bullets
+
+Agents may maintain `.research-kb/index.json` as a generated cache of note paths, node types, links, and typed edges. For large vaults, agents should probe `.research-kb/search/*.jsonl` instead of reading the whole cache. These caches are not authoritative; deleting and regenerating them from Markdown should be safe.
 
 Example:
 
@@ -270,13 +274,15 @@ Workflow:
 1. Researcher drops PDFs into `raw/papers/`.
 2. Researcher asks the KB agent to process the raw zone.
 3. Agent extracts available PDF metadata and text.
-4. Agent creates a draft paper note in `papers/`.
-5. Agent records `intake_source: raw_pdf` and `raw_pdf_path`.
-6. Agent generates a stable local `paper_id`.
-7. Agent marks missing/uncertain metadata clearly.
-8. Agent proposes links to concepts, variables, methods, and communities.
-9. Agent moves successfully processed PDFs to `raw/processed/` or records their processed status.
-10. Researcher reviews the note in Obsidian.
+4. CLI creates a draft paper note in `papers/`.
+5. CLI records `intake_source: raw_pdf`, `raw_pdf_path`, and `pdf_sha256`.
+6. CLI generates a stable local `paper_id`.
+7. Agent exports a portable paper-understanding task with extracted text and an expected JSON schema.
+8. The bundled `research-kb.paper-process` agent analyzes the task from extracted text only, returning structured summaries, findings, evidence anchors, and candidate graph links. In Codex, spawn one worker subagent per exported paper task.
+9. CLI applies the returned JSON to Markdown and marks uncertainty clearly.
+10. Agent proposes links to concepts, variables, methods, and communities.
+11. Agent moves successfully processed PDFs to `raw/processed/` or records their processed status.
+12. Researcher reviews the note in Obsidian.
 
 Example frontmatter:
 
@@ -370,12 +376,13 @@ Possible later upgrades:
 1. Agent scans `raw/papers/`.
 2. Agent detects unprocessed PDFs.
 3. Agent extracts text and metadata.
-4. Agent creates a draft note in `papers/`.
-5. Agent records PDF path, extraction status, and uncertain fields.
-6. Agent adds a concise paper summary.
-7. Agent extracts research question, data, variables, social factors, methods, findings, limitations, and useful quotes.
-8. Agent proposes Markdown links.
-9. Agent updates `index.md` and `log.md`.
+4. CLI creates a draft note in `papers/`.
+5. CLI records PDF path, PDF hash, extraction status, and uncertain fields.
+6. Agent exports `agent-context` JSON for each paper note. The task names `research-kb.paper-process` and includes a result path.
+7. A Codex worker subagent running the bundled paper process agent analyzes the extracted text only and returns JSON matching the schema. If subagents are unavailable, another harness model or human can satisfy the same contract.
+8. CLI applies the returned analysis to add a concise summary, research question, data, variables, social factors, methods, findings, limitations, useful quotes, and evidence anchors.
+9. Agent proposes Markdown links and creates candidate graph nodes only when requested.
+10. Agent updates `index.md` and `log.md`.
 
 ### Workflow B: Given an Idea, Find Papers and Directions
 
@@ -442,11 +449,21 @@ Periodic checks:
 
 ## 13. Recommended Vault Layout
 
+The Codex skill and helper scripts are reusable tooling. They should live outside the user's research content, such as in `~/.codex/skills/research-kb/` or a development repository. Each user or project should choose a separate Obsidian vault root for the actual knowledge base content.
+
+Agents should always operate on the selected vault path explicitly, for example `--vault /path/to/user-vault`, and should not write PDFs, notes, or `.research-kb/` state into the installed skill directory.
+
+Canonical templates ship with the installed skill and are copied into each selected vault during `init`. The vault-local `templates/` folder is the user's customization layer; generation should prefer vault templates, then installed skill templates, then embedded fallbacks.
+
 ```text
 research-kb/
   index.md
   log.md
   AGENTS.md
+
+  .research-kb/
+    config.yaml
+    index.json
 
   raw/
     papers/
@@ -470,6 +487,8 @@ research-kb/
 
 The `plugins/zotero/` folder exists as a placeholder for a later optional integration; it is not required for v1.
 
+`index.md` is the human-facing Obsidian entry point. `.research-kb/index.json` is a generated machine cache for agents and CLI tools; it should be regenerated from Markdown notes rather than treated as the source of truth.
+
 ## 14. MVP Build Sequence
 
 ### Phase 1: Vault Foundation
@@ -477,9 +496,9 @@ The `plugins/zotero/` folder exists as a placeholder for a later optional integr
 - Create folders and templates.
 - Create raw PDF intake folders.
 - Create `AGENTS.md` rules for PDF processing, citation, linking, uncertainty, and updates.
-- Create `index.md` and `log.md`.
+- Create `index.md`, `log.md`, `.research-kb/config.yaml`, and `.research-kb/index.json`.
 
-Success: raw PDFs can be detected from `raw/papers/`.
+Success: raw PDFs can be detected from `raw/papers/`, and the machine index can be refreshed from the Markdown graph.
 
 ### Phase 2: First 10 PDFs
 

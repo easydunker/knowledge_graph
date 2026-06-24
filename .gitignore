@@ -3,6 +3,9 @@ raw/papers/*.pdf
 raw/processed/*.pdf
 raw/failed/*.pdf
 
+# Generated KB cache.
+.research-kb/index.json
+
 # Common local/editor noise.
 .DS_Store
 .obsidian/workspace*.json

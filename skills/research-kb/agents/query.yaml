@@ -1,0 +1,16 @@
+interface:
+  display_name: "Research KB Query Agent"
+  short_description: "Find papers and graph nodes from topics, authors, title clues, methods, variables, or other KB search clues."
+role:
+  name: "research-kb.query"
+  task: "research_kb_lookup_and_discovery"
+  main_goal: "retrieve_supporting_documents_from_kb"
+  canonical_instructions: "../references/query-agent.md"
+  capacity_contract: "../references/agent-capacity.md"
+  max_corpus_papers: 10000
+  max_words_per_paper: 10000
+  normal_detailed_papers_per_pass: "5-20"
+  notes:
+    - "Return evidence packets and coverage notes for the root harness."
+    - "Use index/probe search before reading detailed paper notes."
+    - "Use only the selected vault; do not use external search as KB evidence."
