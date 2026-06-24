@@ -2468,6 +2468,7 @@ def unique_note_path(root: Path, paper_id: str) -> Path:
 def render_paper_note(root: Path, info: PdfInfo, relative_pdf_path: str, paper_id: str) -> str:
     uncertain = ", ".join(info.uncertain_fields) if info.uncertain_fields else "none"
     preview = info.text_preview or "No text preview extracted. Review the PDF manually."
+    doi = info.doi or ""
     metadata_confidence = "low"
     if info.title and info.year and info.authors and info.extraction_status == "ok":
         metadata_confidence = "high"
@@ -2480,16 +2481,16 @@ def render_paper_note(root: Path, info: PdfInfo, relative_pdf_path: str, paper_i
         "title": info.title or paper_id,
         "authors": yaml_list(info.authors),
         "year": info.year,
-        "doi": info.doi,
+        "doi": doi,
         "publication": info.publication,
         "author_links": author_link_lines(info.authors),
         "date": today(),
     }
     note = render_template("paper.md", values, root=root)
     if "- DOI: {{doi}}" in note:
-        note = note.replace("- DOI: {{doi}}", f"- DOI: {info.doi}")
+        note = note.replace("- DOI: {{doi}}", f"- DOI: {doi}")
     elif "- DOI:" in note:
-        note = re.sub(r"^- DOI:.*$", f"- DOI: {info.doi}", note, count=1, flags=re.M)
+        note = re.sub(r"^- DOI:.*$", f"- DOI: {doi}", note, count=1, flags=re.M)
     note = note.replace("- metadata_confidence:", f"- metadata_confidence: {metadata_confidence}")
     note = note.replace("- text_extraction_status:", f"- text_extraction_status: {info.extraction_status}")
     note = note.replace("- uncertain_fields:", f"- uncertain_fields: {uncertain}\n- text_preview: {preview}")

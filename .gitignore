@@ -3,8 +3,14 @@ raw/papers/*.pdf
 raw/processed/*.pdf
 raw/failed/*.pdf
 
-# Generated KB cache.
+# Generated KB state and caches.
 .research-kb/index.json
+.research-kb/search/
+.research-kb/agent-tasks/
+.research-kb/agent-results/
+.research-kb/reports/
+.research-kb/tmp/
+.research-kb/cache/
 
 # Common local/editor noise.
 .DS_Store

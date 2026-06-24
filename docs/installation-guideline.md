@@ -259,7 +259,7 @@ After adding one PDF to `raw/papers/`:
 ```bash
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" process --limit 1
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" agent-context --limit 1
-find "$VAULT/.research-kb/agent-tasks" -name '*.json' -maxdepth 1
+ls "$VAULT/.research-kb/agent-tasks/"*.agent-task.json
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" query "author name or paper topic" --mode idea
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" lint
 ```

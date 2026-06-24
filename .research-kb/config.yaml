@@ -4,10 +4,12 @@ schema_version: 1
 human_index: index.md
 machine_state_dir: .research-kb
 machine_index: .research-kb/index.json
+search_index_dir: .research-kb/search
 raw_pdf_dir: raw/papers
 source_of_truth: markdown_notes
 node_folders:
   paper: papers
+  author: authors
   concept: concepts
   variable: variables
   method: methods
