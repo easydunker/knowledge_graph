@@ -17,19 +17,20 @@ Find or choose the vault root first. If the user has not supplied a path, ask fo
 
 Use the bundled CLI for the vault lifecycle. The CLI is model-agnostic: it never calls an LLM provider, never requires a provider API key, and treats model reasoning as an agent/subagent contract.
 
-When Codex subagents are available, process PDFs with the bundled paper process agent by default. The CLI should extract PDFs and export tasks; spawn one `research-kb.paper-process` worker per task to understand and summarize one paper from extracted text; then apply the worker JSON back into Markdown. `agent-context` includes the full retained extracted text by default. Use `--max-chars <N>` only when a smaller/local harness needs an explicit task-size cap; `--max-chars 0` means no task-level cap.
+When Codex subagents are available, process PDFs with the bundled paper process agent by default. For quota-constrained harnesses, prefer the resumable `build-jobs` workflow: export a small batch, spawn `research-kb.paper-process` workers for that batch, apply returned results, run quality guard automatically, then resume later from the vault-local job ledger. `agent-context` and `build-jobs export-paper` include the full retained extracted text by default. Use `--max-chars <N>` only when a smaller/local harness needs an explicit task-size cap; `--max-chars 0` means no task-level cap.
 
 ```bash
 VAULT="/path/to/user-selected-vault"
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" init
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" index
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" process
-python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" agent-context
-python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" apply-analysis .research-kb/agent-results/*.json --create-nodes
-python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" quality-guard
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-jobs refresh
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-jobs status
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-jobs export-paper --batch-size 10
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-jobs apply-paper
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" reconcile-metadata --apply
-python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" curator-context
-python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" apply-curation .research-kb/curator-results/*.json
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-jobs export-curator --batch-size 20
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-jobs apply-curator
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-report
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" query "rhotics, gender, and identity" --mode idea
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" review
@@ -39,17 +40,17 @@ python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" lint --fix
 
 For real PDFs, prefer a Python environment with `pymupdf4llm` and `pypdf` installed. `pymupdf4llm` is the preferred extraction backend because it produces LLM-ready Markdown; `pypdf` remains a compatibility fallback. If optional PDF libraries are unavailable, the CLI still creates conservative hash-tracked drafts and marks uncertain extraction fields for review.
 
-Agent-assisted paper understanding:
+Quota-resilient agent-assisted paper understanding:
 
 1. Run `process` to create paper notes with `raw_pdf_path` and `pdf_sha256`.
-2. Run `agent-context` to export `.research-kb/agent-tasks/*.agent-task.json`. By default, each task includes the full retained extracted paper text.
-3. Read `references/paper-process-agent.md` and `references/agent-contract.md`.
-4. In Codex, spawn one worker subagent per task. Give each worker exactly one task JSON path and the instruction to act as `research-kb.paper-process`, write only the result JSON to the task's `result_path`, and avoid editing notes directly.
-5. Save returned JSON under `.research-kb/agent-results/`.
-6. Run `apply-analysis ... --create-nodes` to write source-grounded sections and candidate graph nodes.
-7. Run `quality-guard` to mark low-quality paper-process outputs. Quality-failed papers remain searchable but are skipped by curation and synthesis.
+2. Run `build-jobs refresh` to create or update `.research-kb/jobs/*.jsonl`.
+3. Run `build-jobs export-paper --batch-size 5` to `20`, depending on available quota.
+4. Read `references/paper-process-agent.md` and `references/agent-contract.md`.
+5. In Codex, spawn one worker subagent per exported task. Give each worker exactly one task JSON path and the instruction to act as `research-kb.paper-process`, write only the result JSON to the task's `result_path`, and avoid editing notes directly.
+6. Run `build-jobs apply-paper`. This applies returned JSON, creates candidate graph nodes by default, runs `quality-guard` for touched papers, and marks a paper job complete only when quality passed.
+7. Repeat `build-jobs status`, `build-jobs export-paper --batch-size N`, and `build-jobs apply-paper` until no pending paper jobs remain.
 8. Run `reconcile-metadata --apply` to query Crossref, OpenAlex, and Semantic Scholar for bibliographic metadata, write high-confidence title/DOI/year/venue/author cleanup to paper frontmatter, and produce duplicate/stale node clusters. OpenAlex and Semantic Scholar API keys are optional. Omit `--apply` only for dry-run/report-only reconciliation.
-9. Run `curator-context`, spawn `research-kb.node-curator` workers, and run `apply-curation` to enrich non-paper nodes, create strong active synthesis notes, and apply high-confidence merge/archive plans.
+9. Run `build-jobs export-curator --batch-size 10` to `20`, spawn `research-kb.node-curator` workers for exported tasks, and run `build-jobs apply-curator` to enrich non-paper nodes, create strong active synthesis notes, and apply high-confidence merge/archive plans.
 
 Use `enrich --create-nodes` only as deterministic offline fallback when no agent/subagent reasoning is available.
 
@@ -69,7 +70,7 @@ When the user explicitly authorizes subagents or delegated agent work, the harne
 8. Apply results with `apply-curation`.
 9. Run `lint`, `index`, and `build-report`.
 
-Keep each worker scoped to one task JSON and require it to write only the task's `result_path`. For large vaults, batch workers by retrieval shard or note type so the root harness never needs to load the whole graph or all paper summaries at once.
+For quota-constrained Codex runs, replace steps 1-8 with the job-aware commands: `build-jobs refresh`, `build-jobs export-paper --batch-size N`, `build-jobs apply-paper`, `reconcile-metadata --apply`, `build-jobs export-curator --batch-size N`, and `build-jobs apply-curator`. Keep each worker scoped to one task JSON and require it to write only the task's `result_path`. For large vaults, batch workers by retrieval shard or note type so the root harness never needs to load the whole graph or all paper summaries at once.
 
 When this repository is the vault, the wrapper is:
 
@@ -77,12 +78,12 @@ When this repository is the vault, the wrapper is:
 python3 scripts/kb.py init
 python3 scripts/kb.py index
 python3 scripts/kb.py process
-python3 scripts/kb.py agent-context
-python3 scripts/kb.py apply-analysis .research-kb/agent-results/*.json --create-nodes
-python3 scripts/kb.py quality-guard
+python3 scripts/kb.py build-jobs refresh
+python3 scripts/kb.py build-jobs export-paper --batch-size 10
+python3 scripts/kb.py build-jobs apply-paper
 python3 scripts/kb.py reconcile-metadata --apply
-python3 scripts/kb.py curator-context
-python3 scripts/kb.py apply-curation .research-kb/curator-results/*.json
+python3 scripts/kb.py build-jobs export-curator --batch-size 20
+python3 scripts/kb.py build-jobs apply-curator
 python3 scripts/kb.py build-report
 python3 scripts/kb.py query "your question"
 python3 scripts/kb.py lint
@@ -97,9 +98,9 @@ python3 scripts/kb.py --vault /path/to/user-selected-vault init
 ## Workflow Choice
 
 - **Bootstrap or install a vault:** run `init`, then inspect `AGENTS.md`, templates, and `index.md`.
-- **Process PDFs:** run `process`; then run `agent-context`, use the bundled `research-kb.paper-process` agent through Codex subagents when available, and run `apply-analysis --create-nodes`. Use `enrich --create-nodes` only for deterministic fallback drafts.
+- **Process PDFs:** run `process`; then prefer `build-jobs refresh`, `build-jobs export-paper --batch-size N`, subagent workers, and `build-jobs apply-paper` so interrupted or quota-limited runs can resume. Use lower-level `agent-context` and `apply-analysis --create-nodes` only when the harness has its own queue system. Use `enrich --create-nodes` only for deterministic fallback drafts.
 - **Reconcile metadata:** run `reconcile-metadata --apply` during the default build to use Crossref, OpenAlex, and Semantic Scholar to confirm bibliographic metadata, write high-confidence title/DOI/year/venue/author cleanup, and detect duplicate/stale nodes. OpenAlex and Semantic Scholar API keys are optional. Do not use provider metadata as evidence for KB claims; omit `--apply` only for report-only reconciliation.
-- **Curate the KB:** run `quality-guard`, then `curator-context`, then delegate to `research-kb.node-curator`, and finally run `apply-curation`. The curator enriches author/concept/variable/method/community nodes, creates active synthesis notes only when evidence is strong, and can propose high-confidence merges that the CLI archives under `archive/merged/`.
+- **Curate the KB:** after paper jobs are quality-passed and metadata is reconciled, prefer `build-jobs export-curator --batch-size N`, delegate to `research-kb.node-curator`, and run `build-jobs apply-curator`. The lower-level `curator-context` and `apply-curation` commands remain available for harness-owned queues. The curator enriches author/concept/variable/method/community nodes, creates active synthesis notes only when evidence is strong, and can propose high-confidence merges that the CLI archives under `archive/merged/`.
 - **Query the KB:** run `query`; then read the returned paper and synthesis notes before answering so the final response is grounded in the curated vault. For richer retrieval, use bundled query-side subagents: `research-kb.query` for topic/author/title/metadata clues, `research-kb.claim-support` for suggest-only paragraph support, and `research-kb.synthesis` for previous-studies discussions.
 - **Review and repair:** run `review` and `lint`; use `lint --fix` only for safe scaffold/index fixes. Use `--create-missing-linked-notes` only when missing wikilinks are substantively useful candidate nodes.
 - **Create graph nodes:** search first, then run `new-node` or create from templates with `status: candidate` when uncertain.

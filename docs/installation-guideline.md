@@ -185,16 +185,23 @@ This creates paper-note drafts with:
 
 The CLI never calls an LLM provider directly. The harness owns model execution.
 
-Export tasks:
+Create or refresh the resumable job ledger:
 
 ```bash
-~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" agent-context
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs refresh
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs status
+```
+
+Export a quota-friendly batch:
+
+```bash
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs export-paper --batch-size 10
 ```
 
 The harness should process each file under:
 
 ```text
-$VAULT/.research-kb/agent-tasks/*.agent-task.json
+$VAULT/.research-kb/agent-tasks/paper/*.agent-task.json
 ```
 
 For each task:
@@ -208,24 +215,25 @@ For each task:
 Apply results:
 
 ```bash
-~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" \
-  --vault "$VAULT" \
-  apply-analysis "$VAULT/.research-kb/agent-results/"*.json \
-  --create-nodes
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs apply-paper
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs status
 ```
 
-Then refresh and check:
+`build-jobs apply-paper` applies returned results, creates candidate graph nodes by default, runs quality guard for touched papers, and marks a paper job complete only when quality passed. Repeat `export-paper`, subagent processing, and `apply-paper` until no paper jobs remain pending/exported/running/result_written.
+
+Then reconcile, curate, refresh, and check:
 
 ```bash
-~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" quality-guard
-~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" reconcile-metadata --mailto "$RESEARCH_KB_MAILTO"
-~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" curator-context
-# Run node curator subagents on "$VAULT/.research-kb/curator-tasks/"*.curator-task.json.
-~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" apply-curation "$VAULT/.research-kb/curator-results/"*.json
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" reconcile-metadata --apply --mailto "$RESEARCH_KB_MAILTO"
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs export-curator --batch-size 20
+# Run node curator subagents on "$VAULT/.research-kb/curator-tasks/jobs/"*.curator-task.json.
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs apply-curator
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" index
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" lint
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-report
 ```
+
+The lower-level commands `agent-context`, `apply-analysis`, `quality-guard`, `curator-context`, and `apply-curation` remain available for harnesses that already have their own queue system.
 
 `reconcile-metadata` writes provider caches and audit reports under:
 
@@ -289,12 +297,14 @@ After adding one PDF to `raw/papers/`:
 
 ```bash
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" process --limit 1
-~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" agent-context --limit 1
-ls "$VAULT/.research-kb/agent-tasks/"*.agent-task.json
-~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" reconcile-metadata --limit 1 --mailto "$RESEARCH_KB_MAILTO"
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs refresh
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs export-paper --batch-size 1
+find "$VAULT/.research-kb/agent-tasks/paper" -type f -name '*.agent-task.json' -print | head -n 1
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-jobs status
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" reconcile-metadata --apply --limit 1 --mailto "$RESEARCH_KB_MAILTO"
 test -f "$VAULT/.research-kb/reconciliation/summary.json"
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" query "author name or paper topic" --mode idea
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" lint
 ```
 
-If `agent-context` includes extracted text and the query can find the paper by title, topic, or author, the harness has the basic integration working.
+If the exported paper task includes extracted text, `build-jobs status` reports the expected pending/exported state, and the query can find the paper by title, topic, or author, the harness has the basic integration working.

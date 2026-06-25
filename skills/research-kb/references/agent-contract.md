@@ -1,12 +1,14 @@
 # Agent Contract
 
-Use this reference when implementing or validating Research KB agent/subagent outputs. The CLI remains model-agnostic: agents write JSON, and `research_kb.py apply-analysis` validates and applies it to Markdown notes.
+Use this reference when implementing or validating Research KB agent/subagent outputs. The CLI remains model-agnostic: agents write JSON, and `research_kb.py build-jobs apply-paper` or the lower-level `apply-analysis` validates and applies paper results to Markdown notes.
 
 ## Paper Process Contract
 
 Input files are emitted by:
 
 ```bash
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault build-jobs export-paper --batch-size 10
+# or, for harnesses with their own queue:
 python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault agent-context
 ```
 
@@ -21,7 +23,7 @@ Each task describes one paper and includes:
 - `expected_json_schema`
 - `result_path`
 
-The process agent writes one JSON file per task under `.research-kb/agent-results/`.
+The process agent writes one JSON file per task to the task's `result_path`. Job-aware exports usually place results under `.research-kb/agent-results/paper/`; lower-level exports may use `.research-kb/agent-results/`.
 
 ## Output Shape
 
@@ -110,6 +112,8 @@ Prefer `node_type` values `concept`, `variable`, `method`, or `community`.
 Input files are emitted by:
 
 ```bash
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault build-jobs export-curator --batch-size 20
+# or, for harnesses with their own queue:
 python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault curator-context
 ```
 
@@ -125,10 +129,12 @@ Each task describes one non-paper node and includes:
 - `expected_json_schema`
 - `result_path`
 
-The curator writes one JSON file per task under `.research-kb/curator-results/`.
+The curator writes one JSON file per task to the task's `result_path`. Job-aware exports usually place results under `.research-kb/curator-results/jobs/`; lower-level exports may use `.research-kb/curator-results/`.
 
 Curator results may update the target node, create active synthesis notes when evidence is strong, and propose high-confidence merge plans. The CLI applies the result with:
 
 ```bash
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault build-jobs apply-curator
+# or, for harnesses with their own queue:
 python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault apply-curation .research-kb/curator-results/*.json
 ```

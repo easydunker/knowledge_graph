@@ -71,12 +71,19 @@ MACHINE_SEARCH_DIR = f"{MACHINE_DIR}/search"
 QUALITY_REPORT_DIR = f"{MACHINE_DIR}/quality-reports"
 CURATOR_TASK_DIR = f"{MACHINE_DIR}/curator-tasks"
 CURATOR_RESULT_DIR = f"{MACHINE_DIR}/curator-results"
+JOBS_DIR = f"{MACHINE_DIR}/jobs"
+PAPER_JOBS_FILE = f"{JOBS_DIR}/paper-process.jsonl"
+CURATOR_JOBS_FILE = f"{JOBS_DIR}/node-curation.jsonl"
+BUILD_RUNS_FILE = f"{JOBS_DIR}/build-runs.jsonl"
+JOBS_STATUS_FILE = f"{JOBS_DIR}/status.json"
 METADATA_CACHE_DIR = f"{MACHINE_DIR}/metadata-cache"
 METADATA_RECONCILIATION_DIR = f"{MACHINE_DIR}/reconciliation"
 ARCHIVE_MERGED_DIR = "archive/merged"
 ARCHIVE_INVALID_DIR = "archive/invalid"
 DEFAULT_AGENT_MAX_CHARS = 0
 DEFAULT_PDF_TEXT_MAX_CHARS = 500000
+PAPER_PROCESS_PROMPT_VERSION = "paper-process-v1"
+NODE_CURATOR_PROMPT_VERSION = "node-curator-v1"
 PAPER_PROCESS_AGENT_NAME = "research-kb.paper-process"
 PAPER_PROCESS_AGENT_PROFILE = "agents/paper-process.yaml"
 PAPER_PROCESS_AGENT_REFERENCE = "references/paper-process-agent.md"
@@ -709,6 +716,7 @@ search_index_dir: .research-kb/search
 quality_report_dir: .research-kb/quality-reports
 curator_task_dir: .research-kb/curator-tasks
 curator_result_dir: .research-kb/curator-results
+jobs_dir: .research-kb/jobs
 metadata_cache_dir: .research-kb/metadata-cache
 metadata_reconciliation_dir: .research-kb/reconciliation
 archive_merged_dir: archive/merged
@@ -3871,6 +3879,390 @@ def command_quality_guard(args: argparse.Namespace) -> int:
     return 1 if failed and args.fail_on_quality_failed else 0
 
 
+PAPER_JOB_COMPLETE = "quality_passed"
+CURATOR_JOB_COMPLETE = "applied"
+JOB_STATUSES = [
+    "pending",
+    "exported",
+    "running",
+    "result_written",
+    "applied",
+    "quality_passed",
+    "quality_failed",
+    "failed",
+    "retry_pending",
+]
+
+
+def now_job_timestamp() -> str:
+    return utc_timestamp()
+
+
+def safe_job_part(value: str, fallback: str = "unknown") -> str:
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-")
+    return clean or fallback
+
+
+def job_sha(value: str, length: int = 16) -> str:
+    if not value:
+        return "unknown"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+
+
+def read_jsonl_records(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def write_jsonl_records(path: Path, records: list[dict[str, Any]]) -> None:
+    ensure_dir(path.parent)
+    lines = [json.dumps(record, ensure_ascii=False, sort_keys=True) for record in records]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def job_ledger_path(root: Path, kind: str) -> Path:
+    if kind == "paper":
+        return root / PAPER_JOBS_FILE
+    if kind == "curator":
+        return root / CURATOR_JOBS_FILE
+    raise ValueError(f"unknown job ledger kind `{kind}`")
+
+
+def load_job_ledger(root: Path, kind: str) -> dict[str, dict[str, Any]]:
+    return {as_string(record.get("job_id")): record for record in read_jsonl_records(job_ledger_path(root, kind)) if as_string(record.get("job_id"))}
+
+
+def save_job_ledger(root: Path, kind: str, jobs: dict[str, dict[str, Any]]) -> None:
+    ordered = sorted(jobs.values(), key=lambda item: (as_string(item.get("note_path") or item.get("node_path")), as_string(item.get("job_id"))))
+    write_jsonl_records(job_ledger_path(root, kind), ordered)
+
+
+def append_build_run(root: Path, event: dict[str, Any]) -> None:
+    path = root / BUILD_RUNS_FILE
+    ensure_dir(path.parent)
+    record = {"timestamp": now_job_timestamp(), **event}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def job_rel_path(*parts: str) -> str:
+    return "/".join(part.strip("/") for part in parts if part)
+
+
+def paper_job_id(note: Note, extraction_hash: str) -> str:
+    pdf_hash = safe_job_part(str(note.frontmatter.get("pdf_sha256", ""))[:16], "no-pdf")
+    text_hash = safe_job_part(extraction_hash[:16], "no-text")
+    stem = safe_job_part(note.path.stem)
+    return f"paper-{pdf_hash}-{text_hash}-{PAPER_PROCESS_PROMPT_VERSION}-{stem}"
+
+
+def curator_job_id(node: Note, evidence_fingerprint: str) -> str:
+    node_hash = job_sha(node.rel_path, 12)
+    evidence_hash = safe_job_part(evidence_fingerprint[:16], "no-evidence")
+    stem = safe_job_part(node.path.stem)
+    return f"curator-{node_hash}-{evidence_hash}-{NODE_CURATOR_PROMPT_VERSION}-{stem}"
+
+
+def paper_job_task_path(job: dict[str, Any]) -> str:
+    return job_rel_path(MACHINE_DIR, "agent-tasks", "paper", f"{job['job_id']}.agent-task.json")
+
+
+def paper_job_result_path(job: dict[str, Any]) -> str:
+    return job_rel_path(MACHINE_DIR, "agent-results", "paper", f"{job['job_id']}.agent-result.json")
+
+
+def curator_job_task_path(job: dict[str, Any]) -> str:
+    return job_rel_path(MACHINE_DIR, "curator-tasks", "jobs", f"{job['job_id']}.curator-task.json")
+
+
+def curator_job_result_path(job: dict[str, Any]) -> str:
+    return job_rel_path(MACHINE_DIR, "curator-results", "jobs", f"{job['job_id']}.curator-result.json")
+
+
+def quality_report_path_for_note(note: Note) -> str:
+    return job_rel_path(QUALITY_REPORT_DIR, f"{note.path.stem}.quality-report.json")
+
+
+def preserve_job_state(previous: dict[str, Any] | None, default_status: str) -> tuple[str, int, str]:
+    if not previous:
+        return default_status, 0, ""
+    status = as_string(previous.get("status")) or default_status
+    attempts_value = previous.get("attempts", 0)
+    attempts = int(attempts_value) if isinstance(attempts_value, int) else 0
+    last_error = as_string(previous.get("last_error"))
+    return status, attempts, last_error
+
+
+def applied_result_matches(note: Note, result_path: Path) -> bool:
+    if not result_path.exists():
+        return False
+    build = kb_build_data(note)
+    paper_process = build.get("paper_process") if isinstance(build.get("paper_process"), dict) else {}
+    applied_hash = as_string(paper_process.get("result_sha256")) if isinstance(paper_process, dict) else ""
+    try:
+        _note_path, analysis, _source, _model = load_analysis_payload(result_path)
+    except Exception:
+        return False
+    result_hash = hashlib.sha256(json.dumps(analysis, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    return bool(applied_hash and applied_hash == result_hash)
+
+
+def infer_paper_job_status(root: Path, note: Note, job: dict[str, Any], previous: dict[str, Any] | None) -> str:
+    quality_state = paper_quality_state(note)
+    if quality_state == "passed":
+        return PAPER_JOB_COMPLETE
+    if quality_state == "failed":
+        return "quality_failed"
+    task_path = root / as_string(job.get("task_path"))
+    result_path = root / as_string(job.get("result_path"))
+    if applied_result_matches(note, result_path):
+        return "applied"
+    if result_path.exists():
+        return "result_written"
+    if task_path.exists():
+        previous_status = as_string(previous.get("status")) if previous else ""
+        return previous_status if previous_status == "running" else "exported"
+    return "pending"
+
+
+def build_paper_job(root: Path, note: Note, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    extraction_hash = ""
+    build = kb_build_data(note)
+    extraction_build = build.get("extraction") if isinstance(build.get("extraction"), dict) else {}
+    if isinstance(extraction_build, dict):
+        extraction_hash = as_string(extraction_build.get("extracted_text_sha256"))
+    if not extraction_hash:
+        try:
+            extraction_hash = extract_note_pdf_payload(root, note).extracted_text_sha256
+        except Exception:
+            extraction_hash = ""
+    job_id = paper_job_id(note, extraction_hash)
+    status, attempts, last_error = preserve_job_state(previous, "pending")
+    job = {
+        "schema_version": 1,
+        "job_id": job_id,
+        "job_type": "paper_process",
+        "note_path": note.rel_path,
+        "raw_pdf_path": as_string(note.frontmatter.get("raw_pdf_path")),
+        "pdf_sha256": as_string(note.frontmatter.get("pdf_sha256")),
+        "extracted_text_sha256": extraction_hash,
+        "agent_name": PAPER_PROCESS_AGENT_NAME,
+        "agent_contract_version": 1,
+        "prompt_version": PAPER_PROCESS_PROMPT_VERSION,
+        "status": status,
+        "attempts": attempts,
+        "max_attempts": int(previous.get("max_attempts", 1)) if previous and isinstance(previous.get("max_attempts"), int) else 1,
+        "task_path": "",
+        "result_path": "",
+        "quality_report_path": quality_report_path_for_note(note),
+        "last_error": last_error,
+        "created_at": as_string(previous.get("created_at")) if previous else now_job_timestamp(),
+        "updated_at": now_job_timestamp(),
+    }
+    job["task_path"] = paper_job_task_path(job)
+    job["result_path"] = paper_job_result_path(job)
+    job["status"] = infer_paper_job_status(root, note, job, previous)
+    return job
+
+
+def refresh_paper_jobs(root: Path) -> dict[str, dict[str, Any]]:
+    previous = load_job_ledger(root, "paper")
+    previous_by_note = {as_string(job.get("note_path")): job for job in previous.values() if as_string(job.get("note_path"))}
+    jobs: dict[str, dict[str, Any]] = {}
+    for note in load_notes(root):
+        if note.note_type != "paper":
+            continue
+        job = build_paper_job(root, note, previous_by_note.get(note.rel_path))
+        prior = previous.get(job["job_id"])
+        if prior and prior is not previous_by_note.get(note.rel_path):
+            job = build_paper_job(root, note, prior)
+        jobs[job["job_id"]] = job
+    save_job_ledger(root, "paper", jobs)
+    return jobs
+
+
+def paper_jobs_by_status(jobs: dict[str, dict[str, Any]], statuses: set[str]) -> list[dict[str, Any]]:
+    selected = [job for job in jobs.values() if as_string(job.get("status")) in statuses]
+    return sorted(selected, key=lambda item: (as_string(item.get("note_path")), as_string(item.get("job_id"))))
+
+
+def set_job_status(job: dict[str, Any], status: str, error: str = "") -> None:
+    job["status"] = status
+    job["updated_at"] = now_job_timestamp()
+    if error:
+        job["last_error"] = error
+    elif status not in {"failed", "quality_failed"}:
+        job["last_error"] = ""
+
+
+def command_build_jobs_refresh(args: argparse.Namespace) -> int:
+    root = Path(args.vault).resolve()
+    init_vault(root)
+    paper_jobs = refresh_paper_jobs(root)
+    curator_jobs = refresh_curator_jobs(root, max_papers=args.max_papers)
+    append_build_run(
+        root,
+        {
+            "event": "refresh",
+            "paper_jobs": len(paper_jobs),
+            "curator_jobs": len(curator_jobs),
+        },
+    )
+    print(f"refreshed {len(paper_jobs)} paper job(s) and {len(curator_jobs)} curator job(s)")
+    return 0
+
+
+def summarize_jobs(jobs: dict[str, dict[str, Any]]) -> dict[str, int]:
+    summary = {status: 0 for status in JOB_STATUSES}
+    for job in jobs.values():
+        status = as_string(job.get("status")) or "pending"
+        summary[status] = summary.get(status, 0) + 1
+    return {key: value for key, value in summary.items() if value}
+
+
+def next_job_command(paper_summary: dict[str, int], curator_summary: dict[str, int]) -> str:
+    if paper_summary.get("result_written") or paper_summary.get("applied"):
+        return "build-jobs apply-paper"
+    if paper_summary.get("pending") or paper_summary.get("retry_pending"):
+        return "build-jobs export-paper --batch-size 10"
+    if paper_summary.get("exported") or paper_summary.get("running"):
+        return "wait for paper-process results, then run build-jobs apply-paper"
+    if curator_summary.get("result_written"):
+        return "build-jobs apply-curator"
+    if curator_summary.get("pending") or curator_summary.get("retry_pending"):
+        return "build-jobs export-curator --batch-size 20"
+    if curator_summary.get("exported") or curator_summary.get("running"):
+        return "wait for curator results, then run build-jobs apply-curator"
+    return "lint && index && build-report"
+
+
+def command_build_jobs_status(args: argparse.Namespace) -> int:
+    root = Path(args.vault).resolve()
+    paper_jobs = refresh_paper_jobs(root)
+    curator_jobs = refresh_curator_jobs(root, max_papers=args.max_papers)
+    paper_summary = summarize_jobs(paper_jobs)
+    curator_summary = summarize_jobs(curator_jobs)
+    next_command = next_job_command(paper_summary, curator_summary)
+    status = {
+        "schema_version": 1,
+        "generated_at": now_job_timestamp(),
+        "paper_jobs": paper_summary,
+        "curator_jobs": curator_summary,
+        "next_suggested_command": next_command,
+    }
+    target = root / JOBS_STATUS_FILE
+    ensure_dir(target.parent)
+    target.write_text(json.dumps(status, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    if args.json:
+        print(json.dumps(status, indent=2, ensure_ascii=False, sort_keys=True))
+    else:
+        print("Paper process jobs:")
+        for key, value in paper_summary.items():
+            print(f"- {key}: {value}")
+        print("\nNode curation jobs:")
+        for key, value in curator_summary.items():
+            print(f"- {key}: {value}")
+        print(f"\nNext suggested command:\npython3 <skill-dir>/scripts/research_kb.py --vault {root} {next_command}")
+        print(f"\nwrote {rel_to(target, root)}")
+    return 0
+
+
+def command_build_jobs_export_paper(args: argparse.Namespace) -> int:
+    root = Path(args.vault).resolve()
+    init_vault(root)
+    jobs = refresh_paper_jobs(root)
+    selected = paper_jobs_by_status(jobs, {"pending", "retry_pending"})[: args.batch_size]
+    written = 0
+    for job in selected:
+        note = find_note_arg(root, as_string(job.get("note_path")))
+        if not note or note.note_type != "paper":
+            set_job_status(job, "failed", "cannot resolve paper note")
+            continue
+        try:
+            task = paper_agent_task(root, note, max_chars=args.max_chars)
+            task["job_id"] = job["job_id"]
+            task["prompt_version"] = PAPER_PROCESS_PROMPT_VERSION
+            task["result_path"] = job["result_path"]
+            task["result_envelope"]["job_id"] = job["job_id"]
+            target = root / as_string(job.get("task_path"))
+            ensure_dir(target.parent)
+            target.write_text(json.dumps(task, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            job["attempts"] = int(job.get("attempts", 0)) + 1
+            set_job_status(job, "exported")
+            print(f"wrote {rel_to(target, root)}")
+            written += 1
+        except Exception as exc:
+            set_job_status(job, "failed", str(exc))
+            print(f"failed {job.get('note_path')}: {exc}", file=sys.stderr)
+    save_job_ledger(root, "paper", jobs)
+    append_log(root, f"Exported {written} resumable paper-process job task(s).")
+    append_build_run(root, {"event": "export-paper", "written": written, "batch_size": args.batch_size})
+    return 0 if written or not selected else 1
+
+
+def apply_quality_guard_to_note(root: Path, note: Note) -> dict[str, Any]:
+    report = quality_report_for_note(root, note)
+    target = root / quality_report_path_for_note(note)
+    ensure_dir(target.parent)
+    target.write_text(json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    apply_quality_state(note, report)
+    return report
+
+
+def command_build_jobs_apply_paper(args: argparse.Namespace) -> int:
+    root = Path(args.vault).resolve()
+    init_vault(root)
+    jobs = refresh_paper_jobs(root)
+    candidates = paper_jobs_by_status(jobs, {"exported", "running", "result_written", "applied"})
+    applied = 0
+    failed = 0
+    changed_count = 0
+    for job in candidates:
+        result_path = root / as_string(job.get("result_path"))
+        if not result_path.exists():
+            continue
+        try:
+            note_path, analysis, source, model = load_analysis_payload(result_path)
+            note_arg = as_string(job.get("note_path")) or note_path
+            note = find_note_arg(root, note_arg)
+            if not note or note.note_type != "paper":
+                raise ValueError(f"cannot resolve paper note `{note_arg}`")
+            changed, message = apply_agent_analysis_to_note(root, note, analysis, source, model, args.force, args.create_nodes)
+            changed_count += int(changed)
+            print(message)
+            fresh_note = find_note_arg(root, note.rel_path)
+            if not fresh_note:
+                raise ValueError(f"cannot reload paper note `{note.rel_path}`")
+            report = apply_quality_guard_to_note(root, fresh_note)
+            if report.get("verdict") == "passed":
+                set_job_status(job, PAPER_JOB_COMPLETE)
+            else:
+                set_job_status(job, "quality_failed", ", ".join(as_string_list(report.get("failed_checks"))))
+            print(f"{report['verdict']} {fresh_note.rel_path} -> {job.get('quality_report_path')}")
+            applied += 1
+        except Exception as exc:
+            failed += 1
+            set_job_status(job, "failed", str(exc))
+            print(f"failed {rel_to(result_path, root)}: {exc}", file=sys.stderr)
+    save_job_ledger(root, "paper", jobs)
+    if changed_count:
+        update_index(root)
+    append_log(root, f"Applied {applied} resumable paper-process result(s); {failed} failed.")
+    append_build_run(root, {"event": "apply-paper", "applied": applied, "failed": failed})
+    return 1 if failed else 0
+
+
 def paper_quality_state(note: Note) -> str:
     if str(note.frontmatter.get("review_state", "")) == "quality_failed":
         return "failed"
@@ -4056,6 +4448,180 @@ def command_curator_context(args: argparse.Namespace) -> int:
         print(f"wrote {rel_to(target, root)}")
         written += 1
     append_log(root, f"Exported {written} node curator task(s) for {args.mode}.")
+    return 0
+
+
+def selectable_curator_nodes(root: Path, notes: list[Note]) -> list[Note]:
+    selected: list[Note] = []
+    for note in notes:
+        if note.note_type in {"author", "concept", "variable", "method", "community"}:
+            inbound = inbound_paper_records(note, notes, max_papers=1)
+            if inbound or has_reconciliation_work(root, note):
+                selected.append(note)
+    return selected
+
+
+def curator_evidence_fingerprint(root: Path, node: Note, notes: list[Note], max_papers: int) -> str:
+    task = curator_task(root, node, notes, max_papers=max_papers)
+    evidence = {
+        "node_path": node.rel_path,
+        "inbound_papers": task.get("inbound_papers", []),
+        "stale_key_papers": task.get("stale_key_papers", []),
+        "metadata_reconciliation": task.get("metadata_reconciliation", {}),
+        "prompt_version": NODE_CURATOR_PROMPT_VERSION,
+    }
+    return hashlib.sha256(json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def infer_curator_job_status(root: Path, job: dict[str, Any], previous: dict[str, Any] | None) -> str:
+    previous_status = as_string(previous.get("status")) if previous else ""
+    if previous_status == CURATOR_JOB_COMPLETE:
+        return CURATOR_JOB_COMPLETE
+    result_path = root / as_string(job.get("result_path"))
+    task_path = root / as_string(job.get("task_path"))
+    if result_path.exists():
+        return "result_written"
+    if task_path.exists():
+        return previous_status if previous_status == "running" else "exported"
+    return previous_status if previous_status == "retry_pending" else "pending"
+
+
+def build_curator_job(root: Path, node: Note, notes: list[Note], max_papers: int, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    fingerprint = curator_evidence_fingerprint(root, node, notes, max_papers=max_papers)
+    job_id = curator_job_id(node, fingerprint)
+    status, attempts, last_error = preserve_job_state(previous, "pending")
+    job = {
+        "schema_version": 1,
+        "job_id": job_id,
+        "job_type": "node_curation",
+        "node_path": node.rel_path,
+        "node_type": node.note_type,
+        "agent_name": NODE_CURATOR_AGENT_NAME,
+        "agent_contract_version": 1,
+        "prompt_version": NODE_CURATOR_PROMPT_VERSION,
+        "status": status,
+        "attempts": attempts,
+        "max_attempts": int(previous.get("max_attempts", 1)) if previous and isinstance(previous.get("max_attempts"), int) else 1,
+        "task_path": "",
+        "result_path": "",
+        "evidence_fingerprint": fingerprint,
+        "last_error": last_error,
+        "created_at": as_string(previous.get("created_at")) if previous else now_job_timestamp(),
+        "updated_at": now_job_timestamp(),
+    }
+    job["task_path"] = curator_job_task_path(job)
+    job["result_path"] = curator_job_result_path(job)
+    job["status"] = infer_curator_job_status(root, job, previous)
+    return job
+
+
+def refresh_curator_jobs(root: Path, max_papers: int = 20) -> dict[str, dict[str, Any]]:
+    previous = load_job_ledger(root, "curator")
+    previous_by_node = {as_string(job.get("node_path")): job for job in previous.values() if as_string(job.get("node_path"))}
+    notes = load_notes(root)
+    jobs: dict[str, dict[str, Any]] = {}
+    for node in selectable_curator_nodes(root, notes):
+        job = build_curator_job(root, node, notes, max_papers=max_papers, previous=previous_by_node.get(node.rel_path))
+        prior = previous.get(job["job_id"])
+        if prior and prior is not previous_by_node.get(node.rel_path):
+            job = build_curator_job(root, node, notes, max_papers=max_papers, previous=prior)
+        jobs[job["job_id"]] = job
+    save_job_ledger(root, "curator", jobs)
+    return jobs
+
+
+def curator_jobs_by_status(jobs: dict[str, dict[str, Any]], statuses: set[str]) -> list[dict[str, Any]]:
+    selected = [job for job in jobs.values() if as_string(job.get("status")) in statuses]
+    return sorted(selected, key=lambda item: (as_string(item.get("node_path")), as_string(item.get("job_id"))))
+
+
+def command_build_jobs_export_curator(args: argparse.Namespace) -> int:
+    root = Path(args.vault).resolve()
+    init_vault(root)
+    jobs = refresh_curator_jobs(root, max_papers=args.max_papers)
+    notes = load_notes(root)
+    selected = curator_jobs_by_status(jobs, {"pending", "retry_pending"})[: args.batch_size]
+    written = 0
+    for job in selected:
+        node = find_note_arg(root, as_string(job.get("node_path")))
+        if not node or node.note_type == "paper":
+            set_job_status(job, "failed", "cannot resolve curator node")
+            continue
+        try:
+            task = curator_task(root, node, notes, max_papers=args.max_papers)
+            task["job_id"] = job["job_id"]
+            task["prompt_version"] = NODE_CURATOR_PROMPT_VERSION
+            task["result_path"] = job["result_path"]
+            target = root / as_string(job.get("task_path"))
+            ensure_dir(target.parent)
+            target.write_text(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+            job["attempts"] = int(job.get("attempts", 0)) + 1
+            set_job_status(job, "exported")
+            print(f"wrote {rel_to(target, root)}")
+            written += 1
+        except Exception as exc:
+            set_job_status(job, "failed", str(exc))
+            print(f"failed {job.get('node_path')}: {exc}", file=sys.stderr)
+    save_job_ledger(root, "curator", jobs)
+    append_log(root, f"Exported {written} resumable curator job task(s).")
+    append_build_run(root, {"event": "export-curator", "written": written, "batch_size": args.batch_size})
+    return 0 if written or not selected else 1
+
+
+def command_build_jobs_apply_curator(args: argparse.Namespace) -> int:
+    root = Path(args.vault).resolve()
+    init_vault(root)
+    jobs = refresh_curator_jobs(root, max_papers=args.max_papers)
+    candidates = curator_jobs_by_status(jobs, {"exported", "running", "result_written"})
+    applied = 0
+    failed = 0
+    changed_count = 0
+    for job in candidates:
+        result_path = root / as_string(job.get("result_path"))
+        if not result_path.exists():
+            continue
+        try:
+            payload = load_curator_payload(result_path)
+            payload_changed, messages = apply_curator_payload_actions(root, payload, force=args.force, promote=not args.no_promote)
+            changed_count += payload_changed
+            for message in messages:
+                print(message)
+            set_job_status(job, CURATOR_JOB_COMPLETE)
+            applied += 1
+        except Exception as exc:
+            failed += 1
+            set_job_status(job, "failed", str(exc))
+            print(f"failed {rel_to(result_path, root)}: {exc}", file=sys.stderr)
+    save_job_ledger(root, "curator", jobs)
+    if changed_count:
+        update_index(root)
+    append_log(root, f"Applied {applied} resumable curator result(s); {failed} failed.")
+    append_build_run(root, {"event": "apply-curator", "applied": applied, "failed": failed})
+    return 1 if failed else 0
+
+
+def command_build_jobs_retry_failed(args: argparse.Namespace) -> int:
+    root = Path(args.vault).resolve()
+    paper_jobs = refresh_paper_jobs(root)
+    curator_jobs = refresh_curator_jobs(root, max_papers=args.max_papers)
+    changed = 0
+    for kind, jobs in (("paper", paper_jobs), ("curator", curator_jobs)):
+        candidates = [job for job in jobs.values() if as_string(job.get("status")) in {"failed", "quality_failed"}]
+        candidates = sorted(candidates, key=lambda item: (as_string(item.get("note_path") or item.get("node_path")), as_string(item.get("job_id"))))
+        for job in candidates:
+            if args.limit and changed >= args.limit:
+                break
+            attempts = int(job.get("attempts", 0)) if isinstance(job.get("attempts"), int) else 0
+            max_attempts = int(job.get("max_attempts", 1)) if isinstance(job.get("max_attempts"), int) else 1
+            if attempts >= max_attempts and not args.force:
+                continue
+            set_job_status(job, "retry_pending")
+            changed += 1
+            print(f"retry_pending {kind} {job.get('note_path') or job.get('node_path')}")
+    save_job_ledger(root, "paper", paper_jobs)
+    save_job_ledger(root, "curator", curator_jobs)
+    append_build_run(root, {"event": "retry-failed", "changed": changed})
+    print(f"marked {changed} job(s) retry_pending")
     return 0
 
 
@@ -4333,6 +4899,59 @@ def apply_merge_plan(root: Path, plan: dict[str, Any], force: bool) -> tuple[boo
     return True, f"merged {source.rel_path} -> {target.rel_path}; archived {rel_to(archive_path, root)}"
 
 
+def apply_curator_payload_actions(root: Path, payload: dict[str, Any], force: bool, promote: bool) -> tuple[int, list[str]]:
+    changed_count = 0
+    messages: list[str] = []
+    action = as_string(payload.get("action")) or "populate"
+    if action in {"populate", "update", "update_node", "curate_node"}:
+        changed, message = apply_node_curation(root, payload, force=force, promote=promote)
+        messages.append(message)
+        changed_count += int(changed)
+        synthesis_items = payload.get("synthesis_notes")
+        if isinstance(synthesis_items, list):
+            for item in synthesis_items:
+                if isinstance(item, dict):
+                    changed, message = create_synthesis_from_payload(root, item, force=force)
+                    messages.append(message)
+                    changed_count += int(changed)
+        merge_items = payload.get("merge_plans")
+        if isinstance(merge_items, list):
+            for item in merge_items:
+                if isinstance(item, dict):
+                    action_value = as_string(item.get("action")).lower()
+                    if action_value == "archive_invalid":
+                        changed, message = apply_archive_invalid_plan(root, item, force=force)
+                    else:
+                        changed, message = apply_merge_plan(root, item, force=force)
+                    messages.append(message)
+                    changed_count += int(changed)
+    elif action in {"create_synthesis", "create_syntheses"}:
+        items = payload.get("synthesis_notes")
+        if not isinstance(items, list):
+            items = [payload]
+        for item in items:
+            if isinstance(item, dict):
+                changed, message = create_synthesis_from_payload(root, item, force=force)
+                messages.append(message)
+                changed_count += int(changed)
+    elif action in {"merge_nodes", "merge"}:
+        plans = payload.get("merge_plans")
+        if not isinstance(plans, list):
+            plans = [payload]
+        for plan in plans:
+            if isinstance(plan, dict):
+                changed, message = apply_merge_plan(root, plan, force=force)
+                messages.append(message)
+                changed_count += int(changed)
+    elif action in {"archive_invalid", "archive_stale"}:
+        changed, message = apply_archive_invalid_plan(root, payload, force=force)
+        messages.append(message)
+        changed_count += int(changed)
+    else:
+        raise ValueError(f"unknown curator action `{action}`")
+    return changed_count, messages
+
+
 def command_apply_curation(args: argparse.Namespace) -> int:
     root = Path(args.vault).resolve()
     changed_count = 0
@@ -4344,53 +4963,9 @@ def command_apply_curation(args: argparse.Namespace) -> int:
             path = root / path
         try:
             payload = load_curator_payload(path)
-            action = as_string(payload.get("action")) or "populate"
-            if action in {"populate", "update", "update_node", "curate_node"}:
-                changed, message = apply_node_curation(root, payload, force=args.force, promote=not args.no_promote)
-                messages.append(message)
-                changed_count += int(changed)
-                synthesis_items = payload.get("synthesis_notes")
-                if isinstance(synthesis_items, list):
-                    for item in synthesis_items:
-                        if isinstance(item, dict):
-                            changed, message = create_synthesis_from_payload(root, item, force=args.force)
-                            messages.append(message)
-                            changed_count += int(changed)
-                merge_items = payload.get("merge_plans")
-                if isinstance(merge_items, list):
-                    for item in merge_items:
-                        if isinstance(item, dict):
-                            action_value = as_string(item.get("action")).lower()
-                            if action_value == "archive_invalid":
-                                changed, message = apply_archive_invalid_plan(root, item, force=args.force)
-                            else:
-                                changed, message = apply_merge_plan(root, item, force=args.force)
-                            messages.append(message)
-                            changed_count += int(changed)
-            elif action in {"create_synthesis", "create_syntheses"}:
-                items = payload.get("synthesis_notes")
-                if not isinstance(items, list):
-                    items = [payload]
-                for item in items:
-                    if isinstance(item, dict):
-                        changed, message = create_synthesis_from_payload(root, item, force=args.force)
-                        messages.append(message)
-                        changed_count += int(changed)
-            elif action in {"merge_nodes", "merge"}:
-                plans = payload.get("merge_plans")
-                if not isinstance(plans, list):
-                    plans = [payload]
-                for plan in plans:
-                    if isinstance(plan, dict):
-                        changed, message = apply_merge_plan(root, plan, force=args.force)
-                        messages.append(message)
-                        changed_count += int(changed)
-            elif action in {"archive_invalid", "archive_stale"}:
-                changed, message = apply_archive_invalid_plan(root, payload, force=args.force)
-                messages.append(message)
-                changed_count += int(changed)
-            else:
-                raise ValueError(f"unknown curator action `{action}`")
+            payload_changed, payload_messages = apply_curator_payload_actions(root, payload, force=args.force, promote=not args.no_promote)
+            messages.extend(payload_messages)
+            changed_count += payload_changed
         except Exception as exc:
             had_error = True
             messages.append(f"failed {rel_to(path, root)}: {exc}")
@@ -4803,7 +5378,7 @@ def lint_vault(root: Path) -> list[Issue]:
                     if target not in key_papers:
                         missing.append(paper_path)
                 if missing:
-                    issues.append(issue("warn", "stale-key-papers", note.rel_path, f"{key_papers_heading} is missing {len(missing)} inbound quality-passed paper(s): {', '.join(missing[:5])}.", f"Run curator-context and apply-curation, or update {key_papers_heading} manually."))
+                    issues.append(issue("warn", "stale-key-papers", note.rel_path, f"{key_papers_heading} is missing {len(missing)} inbound quality-passed paper(s): {', '.join(missing[:5])}.", f"Run build-jobs export-curator and build-jobs apply-curator, or update {key_papers_heading} manually."))
         elif note.note_type == "synthesis":
             paper_links = 0
             for link in note.links:
@@ -5107,6 +5682,8 @@ def build_report(root: Path) -> dict[str, Any]:
     archived_invalid = sorted(rel_to(path, root) for path in (root / ARCHIVE_INVALID_DIR).rglob("*.md")) if (root / ARCHIVE_INVALID_DIR).exists() else []
     issues = lint_vault(root)
     metadata = reconciliation_summary(root)
+    paper_jobs = summarize_jobs(load_job_ledger(root, "paper"))
+    curator_jobs = summarize_jobs(load_job_ledger(root, "curator"))
     return {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
@@ -5123,6 +5700,9 @@ def build_report(root: Path) -> dict[str, Any]:
         "archived_invalid_notes": len(archived_invalid),
         "archived_invalid_note_paths": archived_invalid,
         "metadata_reconciliation": metadata,
+        "paper_jobs": paper_jobs,
+        "curator_jobs": curator_jobs,
+        "next_job_command": next_job_command(paper_jobs, curator_jobs),
         "lint_errors": sum(1 for item in issues if item.severity == "error"),
         "lint_warnings": sum(1 for item in issues if item.severity == "warn"),
         "needs_user_review": [
@@ -5151,6 +5731,9 @@ def command_build_report(args: argparse.Namespace) -> int:
     print(f"- Metadata matches: {metadata.get('high_confidence_matches', 0)} high / {metadata.get('medium_confidence_matches', 0) + metadata.get('low_confidence_matches', 0)} review")
     print(f"- Duplicate clusters: {metadata.get('duplicate_clusters', 0)}")
     print(f"- Invalid/stale candidates: {metadata.get('invalid_candidates', 0)}")
+    print(f"- Paper jobs: {report['paper_jobs']}")
+    print(f"- Curator jobs: {report['curator_jobs']}")
+    print(f"- Next job command: {report['next_job_command']}")
     print(f"- Lint errors: {report['lint_errors']}")
     print(f"- Lint warnings: {report['lint_warnings']}")
     if report["quality_failed_notes"]:
@@ -5280,6 +5863,46 @@ def build_parser() -> argparse.ArgumentParser:
     apply_curation_parser.add_argument("--force", action="store_true", help="Allow rewriting researcher-reviewed source nodes and lower-confidence merges.")
     apply_curation_parser.add_argument("--no-promote", action="store_true", help="Do not apply curator-recommended status changes.")
     apply_curation_parser.set_defaults(func=command_apply_curation)
+
+    build_jobs_parser = sub.add_parser("build-jobs", help="Manage resumable quota-safe paper processing and curation jobs.")
+    build_jobs_sub = build_jobs_parser.add_subparsers(dest="build_jobs_command", required=True)
+
+    build_jobs_refresh_parser = build_jobs_sub.add_parser("refresh", help="Refresh paper and curator job ledgers from current vault state.")
+    build_jobs_refresh_parser.add_argument("--max-papers", type=int, default=20, help="Maximum inbound paper evidence packets used to fingerprint curator jobs.")
+    build_jobs_refresh_parser.set_defaults(func=command_build_jobs_refresh)
+
+    build_jobs_status_parser = build_jobs_sub.add_parser("status", help="Show resumable build job status and suggested next command.")
+    build_jobs_status_parser.add_argument("--max-papers", type=int, default=20, help="Maximum inbound paper evidence packets used to fingerprint curator jobs.")
+    build_jobs_status_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON status.")
+    build_jobs_status_parser.set_defaults(func=command_build_jobs_status)
+
+    build_jobs_export_paper_parser = build_jobs_sub.add_parser("export-paper", help="Export the next batch of pending paper-process tasks.")
+    build_jobs_export_paper_parser.add_argument("--batch-size", type=int, default=10, help="Maximum number of paper-process tasks to export.")
+    build_jobs_export_paper_parser.add_argument("--max-chars", type=int, default=DEFAULT_AGENT_MAX_CHARS, help="Maximum extracted PDF text characters to include. Use 0 for the full retained extracted text.")
+    build_jobs_export_paper_parser.set_defaults(func=command_build_jobs_export_paper)
+
+    build_jobs_apply_paper_parser = build_jobs_sub.add_parser("apply-paper", help="Apply completed paper-process results and run quality guard.")
+    build_jobs_apply_paper_parser.add_argument("--force", action="store_true", help="Overwrite researcher-reviewed notes when applying analysis.")
+    build_jobs_apply_paper_parser.add_argument("--create-nodes", action="store_true", default=True, help="Create or update candidate graph nodes for returned links.")
+    build_jobs_apply_paper_parser.add_argument("--no-create-nodes", action="store_false", dest="create_nodes", help="Do not create candidate graph nodes while applying results.")
+    build_jobs_apply_paper_parser.set_defaults(func=command_build_jobs_apply_paper)
+
+    build_jobs_export_curator_parser = build_jobs_sub.add_parser("export-curator", help="Export the next batch of pending node-curator tasks.")
+    build_jobs_export_curator_parser.add_argument("--batch-size", type=int, default=20, help="Maximum number of curator tasks to export.")
+    build_jobs_export_curator_parser.add_argument("--max-papers", type=int, default=20, help="Maximum inbound paper evidence packets per curator task.")
+    build_jobs_export_curator_parser.set_defaults(func=command_build_jobs_export_curator)
+
+    build_jobs_apply_curator_parser = build_jobs_sub.add_parser("apply-curator", help="Apply completed curator results.")
+    build_jobs_apply_curator_parser.add_argument("--force", action="store_true", help="Allow overwriting researcher-reviewed notes and lower-confidence curator actions.")
+    build_jobs_apply_curator_parser.add_argument("--no-promote", action="store_true", help="Do not apply curator-suggested status changes.")
+    build_jobs_apply_curator_parser.add_argument("--max-papers", type=int, default=20, help="Maximum inbound paper evidence packets used to fingerprint curator jobs.")
+    build_jobs_apply_curator_parser.set_defaults(func=command_build_jobs_apply_curator)
+
+    build_jobs_retry_parser = build_jobs_sub.add_parser("retry-failed", help="Mark failed or quality-failed jobs for manual retry.")
+    build_jobs_retry_parser.add_argument("--limit", type=int, default=0, help="Maximum number of failed jobs to mark for retry.")
+    build_jobs_retry_parser.add_argument("--force", action="store_true", help="Allow retrying jobs that reached max_attempts.")
+    build_jobs_retry_parser.add_argument("--max-papers", type=int, default=20, help="Maximum inbound paper evidence packets used to fingerprint curator jobs.")
+    build_jobs_retry_parser.set_defaults(func=command_build_jobs_retry_failed)
 
     query_parser = sub.add_parser("query", help="Query the Markdown graph and paper notes.")
     query_parser.add_argument("query", help="Idea, draft claim, or research question to search for.")
