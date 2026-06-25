@@ -14,7 +14,7 @@ The task JSON is the authority. Read these fields first:
 - `agent`: expected `research-kb.paper-process`.
 - `note_path`, `raw_pdf_path`, and `pdf_sha256`: preserve these identifiers.
 - `text_extraction_status`: use it to calibrate confidence.
-- `source_text_chars`, `extracted_text_chars`, and `text_truncated_for_task`: use these to identify whether the task contains the whole extracted paper text or a capped excerpt.
+- `source_text_chars`, `extracted_text_chars`, and `text_truncated_for_task`: use these to identify whether the task contains the full retained extracted paper text or an explicitly capped excerpt.
 - `existing_metadata`: use as starting metadata, but correct it only when the extracted text clearly supports the correction.
 - `known_nodes`: prefer these existing graph nodes when substantively relevant.
 - `expected_json_schema`: the required analysis object schema.
@@ -26,7 +26,7 @@ Do not use web search, prior knowledge of the paper, DOI lookup, Zotero, or any 
 ## Procedure
 
 1. Verify the task is for one paper and has extracted text. Read the entire `extracted_text` field before writing conclusions.
-2. Treat `text_truncated_for_task` as authoritative. If it is `false`, do not claim pipeline truncation. If a section is absent despite full supplied text, report the specific reason in `uncertain_fields`, such as "results section not identifiable in extracted text."
+2. Treat `text_truncated_for_task` as authoritative. The default task export has no task-level cap, so `false` means the full retained extraction was supplied. If it is `false`, do not claim pipeline truncation. If a section is absent despite full supplied text, report the specific reason in `uncertain_fields`, such as "results section not identifiable in extracted text."
 3. If text is missing, extraction is poor, or `text_truncated_for_task` is true, return conservative fields and list the limitation in `uncertain_fields`.
 4. Identify the paper's purpose, research question, data/participants, methods, variables, social factors, and main findings from the extracted text only.
 5. Make `one_paragraph_summary` the strongest part of the output: summarize what the paper studies, what evidence/data it uses, how it analyzes the evidence, and what it concludes.

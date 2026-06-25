@@ -75,7 +75,7 @@ METADATA_CACHE_DIR = f"{MACHINE_DIR}/metadata-cache"
 METADATA_RECONCILIATION_DIR = f"{MACHINE_DIR}/reconciliation"
 ARCHIVE_MERGED_DIR = "archive/merged"
 ARCHIVE_INVALID_DIR = "archive/invalid"
-DEFAULT_AGENT_MAX_CHARS = 120000
+DEFAULT_AGENT_MAX_CHARS = 0
 DEFAULT_PDF_TEXT_MAX_CHARS = 500000
 PAPER_PROCESS_AGENT_NAME = "research-kb.paper-process"
 PAPER_PROCESS_AGENT_PROFILE = "agents/paper-process.yaml"
@@ -1131,14 +1131,22 @@ def paper_agent_instructions() -> str:
     )
 
 
+def task_text_window(text: str, max_chars: int = DEFAULT_AGENT_MAX_CHARS) -> tuple[str, bool]:
+    if max_chars <= 0:
+        return text, False
+    excerpt = text[:max_chars]
+    return excerpt, len(text) > len(excerpt)
+
+
 def build_agent_prompt(root: Path, info: PdfInfo | None, note: Note | None, text: str, extraction_status: str, max_chars: int = DEFAULT_AGENT_MAX_CHARS) -> str:
     title = note.title if note else (info.title if info else "")
     authors = note.frontmatter.get("authors", []) if note else (info.authors if info else [])
     year = str(note.frontmatter.get("year", "")) if note else (info.year if info else "")
     doi = str(note.frontmatter.get("doi", "")) if note else (info.doi if info else "")
     publication = str(note.frontmatter.get("publication", "")) if note else (info.publication if info else "")
-    excerpt_chars = min(len(text), max_chars)
-    truncation_note = "yes" if len(text) > max_chars else "no"
+    extracted_text, text_truncated_for_task = task_text_window(text, max_chars=max_chars)
+    excerpt_chars = len(extracted_text)
+    truncation_note = "yes" if text_truncated_for_task else "no"
     return f"""Act as the research-kb paper process agent.
 
 Understand and summarize this research paper for an Obsidian Markdown knowledge base.
@@ -1173,8 +1181,7 @@ The result must include `text_truncated_for_task_acknowledged`, `section_coverag
 def paper_agent_task(root: Path, note: Note, max_chars: int = DEFAULT_AGENT_MAX_CHARS) -> dict[str, Any]:
     extraction = extract_note_pdf_payload(root, note)
     text, extraction_status = extraction.text, extraction.status
-    extracted_text = text[:max_chars]
-    text_truncated_for_task = len(text) > len(extracted_text)
+    extracted_text, text_truncated_for_task = task_text_window(text, max_chars=max_chars)
     result_path = f"{MACHINE_DIR}/agent-results/{note.path.stem}.agent-result.json"
     return {
         "schema_version": 1,
@@ -5227,7 +5234,7 @@ def build_parser() -> argparse.ArgumentParser:
     agent_context_parser = sub.add_parser("agent-context", help="Export model-agnostic paper-analysis task JSON for an external agent or subagent.")
     agent_context_parser.add_argument("--note", help="Paper note path, stem, or wikilink. Defaults to draft paper notes.")
     agent_context_parser.add_argument("--output-dir", default=f"{MACHINE_DIR}/agent-tasks", help="Vault-relative or absolute directory for task JSON files.")
-    agent_context_parser.add_argument("--max-chars", type=int, default=DEFAULT_AGENT_MAX_CHARS, help="Maximum extracted PDF text characters to include.")
+    agent_context_parser.add_argument("--max-chars", type=int, default=DEFAULT_AGENT_MAX_CHARS, help="Maximum extracted PDF text characters to include. Use 0 for the full retained extracted text.")
     agent_context_parser.add_argument("--limit", type=int, default=0, help="Maximum number of paper tasks to export.")
     agent_context_parser.add_argument("--all", action="store_true", help="Export all paper notes, including notes whose sections are already filled.")
     agent_context_parser.set_defaults(func=command_agent_context)

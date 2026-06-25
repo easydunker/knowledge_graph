@@ -59,6 +59,8 @@ Use empty strings or arrays when a field is not supported by the extracted text.
 
 The process agent must read the complete supplied `extracted_text` field. The task's `text_truncated_for_task` flag is authoritative. If it is false, the agent must not claim that the pipeline truncated the text.
 
+`agent-context` exports the full retained extracted text by default. Use `--max-chars <N>` only when a harness or model needs a smaller paper-processing task; `--max-chars 0` keeps the default no task-level cap behavior.
+
 ## Edge Objects
 
 Graph edge objects use:

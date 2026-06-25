@@ -17,7 +17,7 @@ Find or choose the vault root first. If the user has not supplied a path, ask fo
 
 Use the bundled CLI for the vault lifecycle. The CLI is model-agnostic: it never calls an LLM provider, never requires a provider API key, and treats model reasoning as an agent/subagent contract.
 
-When Codex subagents are available, process PDFs with the bundled paper process agent by default. The CLI should extract PDFs and export tasks; spawn one `research-kb.paper-process` worker per task to understand and summarize one paper from extracted text; then apply the worker JSON back into Markdown.
+When Codex subagents are available, process PDFs with the bundled paper process agent by default. The CLI should extract PDFs and export tasks; spawn one `research-kb.paper-process` worker per task to understand and summarize one paper from extracted text; then apply the worker JSON back into Markdown. `agent-context` includes the full retained extracted text by default. Use `--max-chars <N>` only when a smaller/local harness needs an explicit task-size cap; `--max-chars 0` means no task-level cap.
 
 ```bash
 VAULT="/path/to/user-selected-vault"
@@ -27,7 +27,7 @@ python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" process
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" agent-context
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" apply-analysis .research-kb/agent-results/*.json --create-nodes
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" quality-guard
-python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" reconcile-metadata
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" reconcile-metadata --apply
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" curator-context
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" apply-curation .research-kb/curator-results/*.json
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-report
@@ -42,13 +42,13 @@ For real PDFs, prefer a Python environment with `pymupdf4llm` and `pypdf` instal
 Agent-assisted paper understanding:
 
 1. Run `process` to create paper notes with `raw_pdf_path` and `pdf_sha256`.
-2. Run `agent-context` to export `.research-kb/agent-tasks/*.agent-task.json`.
+2. Run `agent-context` to export `.research-kb/agent-tasks/*.agent-task.json`. By default, each task includes the full retained extracted paper text.
 3. Read `references/paper-process-agent.md` and `references/agent-contract.md`.
 4. In Codex, spawn one worker subagent per task. Give each worker exactly one task JSON path and the instruction to act as `research-kb.paper-process`, write only the result JSON to the task's `result_path`, and avoid editing notes directly.
 5. Save returned JSON under `.research-kb/agent-results/`.
 6. Run `apply-analysis ... --create-nodes` to write source-grounded sections and candidate graph nodes.
 7. Run `quality-guard` to mark low-quality paper-process outputs. Quality-failed papers remain searchable but are skipped by curation and synthesis.
-8. Run `reconcile-metadata` to query Crossref, OpenAlex, and Semantic Scholar for bibliographic metadata and duplicate/stale node clusters. OpenAlex and Semantic Scholar API keys are optional. Use `--apply` only when you want high-confidence paper metadata updates written to frontmatter.
+8. Run `reconcile-metadata --apply` to query Crossref, OpenAlex, and Semantic Scholar for bibliographic metadata, write high-confidence title/DOI/year/venue/author cleanup to paper frontmatter, and produce duplicate/stale node clusters. OpenAlex and Semantic Scholar API keys are optional. Omit `--apply` only for dry-run/report-only reconciliation.
 9. Run `curator-context`, spawn `research-kb.node-curator` workers, and run `apply-curation` to enrich non-paper nodes, create strong active synthesis notes, and apply high-confidence merge/archive plans.
 
 Use `enrich --create-nodes` only as deterministic offline fallback when no agent/subagent reasoning is available.
@@ -63,7 +63,7 @@ When the user explicitly authorizes subagents or delegated agent work, the harne
 2. Spawn one `research-kb.paper-process` worker per `.research-kb/agent-tasks/*.agent-task.json`, or process tasks in batches for large vaults.
 3. Apply results with `apply-analysis --create-nodes`.
 4. Run `quality-guard`.
-5. Run `reconcile-metadata`, using Crossref, OpenAlex, and Semantic Scholar only for bibliographic cleanup.
+5. Run `reconcile-metadata --apply`, using Crossref, OpenAlex, and Semantic Scholar only for bibliographic cleanup. This writes only high-confidence paper metadata updates and never treats provider metadata as evidence for scholarly claims.
 6. Run `curator-context`.
 7. Spawn one `research-kb.node-curator` worker per `.research-kb/curator-tasks/*.curator-task.json`, or process tasks in batches for large vaults.
 8. Apply results with `apply-curation`.
@@ -80,7 +80,7 @@ python3 scripts/kb.py process
 python3 scripts/kb.py agent-context
 python3 scripts/kb.py apply-analysis .research-kb/agent-results/*.json --create-nodes
 python3 scripts/kb.py quality-guard
-python3 scripts/kb.py reconcile-metadata
+python3 scripts/kb.py reconcile-metadata --apply
 python3 scripts/kb.py curator-context
 python3 scripts/kb.py apply-curation .research-kb/curator-results/*.json
 python3 scripts/kb.py build-report
@@ -98,7 +98,7 @@ python3 scripts/kb.py --vault /path/to/user-selected-vault init
 
 - **Bootstrap or install a vault:** run `init`, then inspect `AGENTS.md`, templates, and `index.md`.
 - **Process PDFs:** run `process`; then run `agent-context`, use the bundled `research-kb.paper-process` agent through Codex subagents when available, and run `apply-analysis --create-nodes`. Use `enrich --create-nodes` only for deterministic fallback drafts.
-- **Reconcile metadata:** run `reconcile-metadata` to use Crossref, OpenAlex, and Semantic Scholar to confirm bibliographic metadata and detect duplicate/stale nodes. OpenAlex and Semantic Scholar API keys are optional. Do not use provider metadata as evidence for KB claims.
+- **Reconcile metadata:** run `reconcile-metadata --apply` during the default build to use Crossref, OpenAlex, and Semantic Scholar to confirm bibliographic metadata, write high-confidence title/DOI/year/venue/author cleanup, and detect duplicate/stale nodes. OpenAlex and Semantic Scholar API keys are optional. Do not use provider metadata as evidence for KB claims; omit `--apply` only for report-only reconciliation.
 - **Curate the KB:** run `quality-guard`, then `curator-context`, then delegate to `research-kb.node-curator`, and finally run `apply-curation`. The curator enriches author/concept/variable/method/community nodes, creates active synthesis notes only when evidence is strong, and can propose high-confidence merges that the CLI archives under `archive/merged/`.
 - **Query the KB:** run `query`; then read the returned paper and synthesis notes before answering so the final response is grounded in the curated vault. For richer retrieval, use bundled query-side subagents: `research-kb.query` for topic/author/title/metadata clues, `research-kb.claim-support` for suggest-only paragraph support, and `research-kb.synthesis` for previous-studies discussions.
 - **Review and repair:** run `review` and `lint`; use `lint --fix` only for safe scaffold/index fixes. Use `--create-missing-linked-notes` only when missing wikilinks are substantively useful candidate nodes.

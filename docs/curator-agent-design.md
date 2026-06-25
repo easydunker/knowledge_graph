@@ -26,7 +26,7 @@ The paper-process sub-agent must read and analyze the **entire** `extracted_text
 
 - `source_text_chars` — total characters extracted from the PDF
 - `extracted_text_chars` — characters included in the task
-- `text_truncated_for_task` — authoritative flag: `true` means the pipeline cut the text at the 120K cap, `false` means the full extracted text is present
+- `text_truncated_for_task` — authoritative flag: `true` means the task was explicitly capped before reaching the process agent, `false` means the full retained extracted text is present
 
 The agent must:
 
@@ -385,11 +385,11 @@ The backlink sync should be idempotent — running it twice produces the same li
 | Constant | Value | Where |
 |----------|-------|-------|
 | `DEFAULT_PDF_TEXT_MAX_CHARS` | 500,000 | `process` — max characters extracted from a single PDF |
-| `DEFAULT_AGENT_MAX_CHARS` | 120,000 | `agent-context` — max characters sent to sub-agent per task |
+| `DEFAULT_AGENT_MAX_CHARS` | 0 | `agent-context` — task-level cap disabled by default |
 
-The 500K extraction cap is hardcoded. The 120K agent cap can be overridden with `--max-chars` on `agent-context`.
+The 500K extraction cap is a retained-text guard against pathological PDFs. The paper-process task export has no task-level cap by default; `--max-chars <N>` on `agent-context` opts into a smaller task, and `--max-chars 0` keeps full retained extracted text.
 
-A "truncated" paper (source > 120K) gets `text_truncated_for_task: true` in the task JSON. Short papers (like 4-page workshop papers at ~18K chars) are not truncated — the sub-agent simply may not find extensive methods/results sections in the available text. The sub-agent should distinguish "text was truncated by the pipeline" from "paper is short and has limited content" — the former is flagged in the task JSON, the latter requires reading the full text before concluding.
+A task gets `text_truncated_for_task: true` only when an explicit `--max-chars` value cuts the retained extraction. Short papers (like 4-page workshop papers at ~18K chars) are not truncated — the sub-agent simply may not find extensive methods/results sections in the available text. The sub-agent should distinguish "text was truncated by the pipeline" from "paper is short and has limited content" — the former is flagged in the task JSON, the latter requires reading the full text before concluding.
 
 ## Open Questions
 
