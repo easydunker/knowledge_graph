@@ -7,7 +7,7 @@ The implementation keeps the core rule intact: the Markdown vault is the source 
 Related design notes:
 
 - [Curator agent design](curator-agent-design.md)
-- [Paper-process quality guard TODO](todo-agent-quality-guard.md)
+- [Paper-process quality guard](paper-process-quality-guard.md)
 - [PDF parser comparison](pdf-parser-comparison.md)
 - [Metadata reconciliation plan](metadata-reconciliation-plan.md)
 
