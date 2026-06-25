@@ -1,0 +1,15 @@
+interface:
+  display_name: "Research KB Paper Process Agent"
+  short_description: "Understand and summarize one extracted research paper task for a Research KB vault."
+role:
+  name: "research-kb.paper-process"
+  task: "research_kb_paper_analysis"
+  main_goal: "understand_and_summarize_input_paper"
+  input_glob: ".research-kb/agent-tasks/*.agent-task.json"
+  output_dir: ".research-kb/agent-results"
+  canonical_instructions: "../references/paper-process-agent.md"
+  output_contract: "../references/agent-contract.md"
+  notes:
+    - "Use only supplied extracted PDF text and existing vault metadata."
+    - "Write one JSON result per task; do not edit paper notes directly."
+    - "The main agent applies results with research_kb.py apply-analysis."

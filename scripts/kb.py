@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backward-compatible entry point for raw PDF intake."""
+"""Compatibility wrapper for the bundled research KB skill CLI."""
 
 from __future__ import annotations
 
@@ -24,4 +24,8 @@ def load_tool():
 
 if __name__ == "__main__":
     tool = load_tool()
-    raise SystemExit(tool.main(["--vault", str(ROOT), "process", *sys.argv[1:]]))
+    args = sys.argv[1:]
+    has_explicit_vault = any(arg == "--vault" or arg.startswith("--vault=") for arg in args)
+    if has_explicit_vault:
+        raise SystemExit(tool.main(args))
+    raise SystemExit(tool.main(["--vault", str(ROOT), *args]))

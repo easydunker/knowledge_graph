@@ -2,6 +2,22 @@
 raw/papers/*.pdf
 raw/processed/*.pdf
 raw/failed/*.pdf
+archive/merged/
+archive/invalid/
+
+# Generated KB state and caches.
+.research-kb/index.json
+.research-kb/search/
+.research-kb/agent-tasks/
+.research-kb/agent-results/
+.research-kb/curator-tasks/
+.research-kb/curator-results/
+.research-kb/quality-reports/
+.research-kb/metadata-cache/
+.research-kb/reconciliation/
+.research-kb/reports/
+.research-kb/tmp/
+.research-kb/cache/
 
 # Common local/editor noise.
 .DS_Store

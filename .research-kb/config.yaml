@@ -1,0 +1,36 @@
+# Research KB tool config
+
+schema_version: 1
+human_index: index.md
+machine_state_dir: .research-kb
+machine_index: .research-kb/index.json
+search_index_dir: .research-kb/search
+quality_report_dir: .research-kb/quality-reports
+curator_task_dir: .research-kb/curator-tasks
+curator_result_dir: .research-kb/curator-results
+metadata_cache_dir: .research-kb/metadata-cache
+metadata_reconciliation_dir: .research-kb/reconciliation
+archive_merged_dir: archive/merged
+raw_pdf_dir: raw/papers
+source_of_truth: markdown_notes
+metadata_reconciliation:
+  enabled: true
+  crossref:
+    enabled: true
+    mailto: ""
+  openalex:
+    enabled: true
+    mailto: ""
+    api_key_env: OPENALEX_API_KEY
+  semantic_scholar:
+    enabled: true
+    api_key_env: SEMANTIC_SCHOLAR_API_KEY
+node_folders:
+  paper: papers
+  author: authors
+  concept: concepts
+  variable: variables
+  method: methods
+  community: communities
+  research_question: questions
+  synthesis: syntheses

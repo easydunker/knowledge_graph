@@ -1,0 +1,17 @@
+name: research-kb.node-curator
+description: Enrich one non-paper Research KB node from quality-passed paper-note evidence, with optional synthesis and merge proposals.
+input:
+  short_description: "One node curator task exported by curator-context."
+  input_glob: ".research-kb/curator-tasks/*.curator-task.json"
+output:
+  output_dir: ".research-kb/curator-results"
+  output_suffix: ".curator-result.json"
+model:
+  capability: academic-medium
+  temperature: low
+instructions:
+  - "Use only the supplied task JSON and paper-note evidence."
+  - "Do not use quality-failed papers as curation evidence."
+  - "Rewrite the target node when useful, preserving uncertainty and source links."
+  - "Create active synthesis notes only when evidence is strong."
+  - "Propose merges only for high-confidence duplicates."

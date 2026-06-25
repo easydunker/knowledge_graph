@@ -20,8 +20,11 @@ Core decisions:
 - Obsidian Markdown is the source of truth for the knowledge base.
 - Agents update only the Obsidian vault.
 - Zotero is not part of the v1 core; it should be designed as an optional plugin.
-- No SQLite, vector database, OpenAlex, or Semantic Scholar is required for the core v1.
+- No SQLite or vector database is required for the core v1.
+- Crossref, OpenAlex, and Semantic Scholar may be used as optional bibliographic metadata authorities for reconciliation, duplicate detection, and author/title cleanup. They are not evidence sources for KB claims.
 - The graph is expressed through Markdown links, frontmatter, tags, aliases, and relation-style bullets.
+- Paper processing is model-agnostic in the CLI. Paper understanding is an agent/subagent contract: export extracted-text tasks, let any harness model produce structured JSON, then apply it back to Markdown.
+- Deterministic extraction/enrichment remains available as an offline fallback and regression-test mode.
 
 This keeps v1 local, inspectable, and easy to test with real papers.
 
@@ -93,6 +96,8 @@ Graph structure lives in Markdown:
 - aliases
 - relation sections
 - recurring relation-style bullets
+
+Agents may maintain `.research-kb/index.json` as a generated cache of note paths, node types, links, and typed edges. For large vaults, agents should probe `.research-kb/search/*.jsonl` instead of reading the whole cache. These caches are not authoritative; deleting and regenerating them from Markdown should be safe.
 
 Example:
 
@@ -270,13 +275,15 @@ Workflow:
 1. Researcher drops PDFs into `raw/papers/`.
 2. Researcher asks the KB agent to process the raw zone.
 3. Agent extracts available PDF metadata and text.
-4. Agent creates a draft paper note in `papers/`.
-5. Agent records `intake_source: raw_pdf` and `raw_pdf_path`.
-6. Agent generates a stable local `paper_id`.
-7. Agent marks missing/uncertain metadata clearly.
-8. Agent proposes links to concepts, variables, methods, and communities.
-9. Agent moves successfully processed PDFs to `raw/processed/` or records their processed status.
-10. Researcher reviews the note in Obsidian.
+4. CLI creates a draft paper note in `papers/`.
+5. CLI records `intake_source: raw_pdf`, `raw_pdf_path`, and `pdf_sha256`.
+6. CLI generates a stable local `paper_id`.
+7. Agent exports a portable paper-understanding task with extracted text and an expected JSON schema.
+8. The bundled `research-kb.paper-process` agent analyzes the task from extracted text only, returning structured summaries, findings, evidence anchors, and candidate graph links. In Codex, spawn one worker subagent per exported paper task.
+9. CLI applies the returned JSON to Markdown and marks uncertainty clearly.
+10. Agent proposes links to concepts, variables, methods, and communities.
+11. Agent moves successfully processed PDFs to `raw/processed/` or records their processed status.
+12. Researcher reviews the note in Obsidian.
 
 Example frontmatter:
 
@@ -328,9 +335,11 @@ Plugin rules:
 
 This keeps the core KB usable even if the researcher does not configure Zotero.
 
-## 10. No Core OpenAlex or Semantic Scholar
+## 10. Metadata Reconciliation APIs
 
-OpenAlex and Semantic Scholar are useful for discovery, but they are not required for the trusted KB.
+Crossref, OpenAlex, and Semantic Scholar should be available as optional metadata reconciliation providers. Their purpose is to reduce duplicate or invalid notes caused by imperfect PDF extraction, especially OCR-damaged titles and author names.
+
+The trusted KB evidence boundary does not change. External provider records may clean bibliographic identity, but they must not add papers to the KB by themselves and must not support scholarly claims.
 
 Core KB answers should rely on:
 
@@ -339,7 +348,23 @@ Core KB answers should rely on:
 - concept/variable/method/community/question/synthesis notes
 - explicit citations and evidence in the vault
 
-Optional later discovery mode:
+Allowed reconciliation uses:
+
+- confirm DOI, title, year, venue, and author display names
+- store stable external IDs such as DOI, OpenAlex work/author IDs, and Semantic Scholar paper/author IDs
+- detect duplicate paper notes by DOI, title, year, author list, and stable provider IDs
+- detect duplicate or invalid author nodes caused by OCR or PDF extraction errors
+- provide candidate duplicate/stale-node clusters to the curator
+
+Provider policy:
+
+- Crossref is preferred for DOI/title/venue metadata and requires no API key.
+- OpenAlex is preferred for work IDs, author IDs, institutions, and broad scholarly graph metadata. It must work without an API key; an OpenAlex API key may be configured optionally.
+- Semantic Scholar is a secondary cross-check for paper and author identity. Its API key is optional.
+
+External metadata should be cached under `.research-kb/metadata-cache/` and reconciliation reports should be written under `.research-kb/reconciliation/`. These are build artifacts, not source-of-truth notes.
+
+Optional later discovery mode remains separate:
 
 ```text
 research idea/question
@@ -352,6 +377,8 @@ research idea/question
 
 External candidates should never be silently treated as KB evidence.
 
+See [Metadata Reconciliation Plan](metadata-reconciliation-plan.md).
+
 ## 11. No Core Vector DB or SQLite
 
 For v1, use Obsidian search, tags, links, and structured Markdown. A separate vector database or SQLite graph would add overhead before the note schema has proven itself.
@@ -361,6 +388,7 @@ Possible later upgrades:
 - SQLite generated from Markdown if structured queries become painful.
 - SQLite FTS if keyword search over notes needs to be automated outside Obsidian.
 - Local embeddings if fuzzy semantic search becomes important.
+- Crossref/OpenAlex/Semantic Scholar metadata reconciliation if duplicate detection and bibliographic cleanup need external identifiers.
 - OpenAlex/Semantic Scholar discovery plugin if literature discovery becomes a separate workflow.
 
 ## 12. Agent Workflows
@@ -370,12 +398,15 @@ Possible later upgrades:
 1. Agent scans `raw/papers/`.
 2. Agent detects unprocessed PDFs.
 3. Agent extracts text and metadata.
-4. Agent creates a draft note in `papers/`.
-5. Agent records PDF path, extraction status, and uncertain fields.
-6. Agent adds a concise paper summary.
-7. Agent extracts research question, data, variables, social factors, methods, findings, limitations, and useful quotes.
-8. Agent proposes Markdown links.
-9. Agent updates `index.md` and `log.md`.
+4. CLI creates a draft note in `papers/`.
+5. CLI records PDF path, PDF hash, extraction status, and uncertain fields.
+6. Agent exports `agent-context` JSON for each paper note. The task names `research-kb.paper-process` and includes a result path.
+7. A Codex worker subagent running the bundled paper process agent analyzes the extracted text only and returns JSON matching the schema. If subagents are unavailable, another harness model or human can satisfy the same contract.
+8. CLI applies the returned analysis to add a concise summary, research question, data, variables, social factors, methods, findings, limitations, useful quotes, and evidence anchors.
+9. Agent proposes Markdown links and creates candidate graph nodes only when requested.
+10. Optional metadata reconciliation checks Crossref, OpenAlex, and Semantic Scholar for bibliographic identity, title/author cleanup, and duplicate/stale candidate clusters.
+11. Curator agents review graph-integrity tasks, including duplicate or invalid non-paper notes, and propose high-confidence merge/archive actions.
+12. Agent updates `index.md` and `log.md`.
 
 ### Workflow B: Given an Idea, Find Papers and Directions
 
@@ -442,11 +473,21 @@ Periodic checks:
 
 ## 13. Recommended Vault Layout
 
+The Codex skill and helper scripts are reusable tooling. They should live outside the user's research content, such as in `~/.codex/skills/research-kb/` or a development repository. Each user or project should choose a separate Obsidian vault root for the actual knowledge base content.
+
+Agents should always operate on the selected vault path explicitly, for example `--vault /path/to/user-vault`, and should not write PDFs, notes, or `.research-kb/` state into the installed skill directory.
+
+Canonical templates ship with the installed skill and are copied into each selected vault during `init`. The vault-local `templates/` folder is the user's customization layer; generation should prefer vault templates, then installed skill templates, then embedded fallbacks.
+
 ```text
 research-kb/
   index.md
   log.md
   AGENTS.md
+
+  .research-kb/
+    config.yaml
+    index.json
 
   raw/
     papers/
@@ -470,6 +511,8 @@ research-kb/
 
 The `plugins/zotero/` folder exists as a placeholder for a later optional integration; it is not required for v1.
 
+`index.md` is the human-facing Obsidian entry point. `.research-kb/index.json` is a generated machine cache for agents and CLI tools; it should be regenerated from Markdown notes rather than treated as the source of truth.
+
 ## 14. MVP Build Sequence
 
 ### Phase 1: Vault Foundation
@@ -477,9 +520,9 @@ The `plugins/zotero/` folder exists as a placeholder for a later optional integr
 - Create folders and templates.
 - Create raw PDF intake folders.
 - Create `AGENTS.md` rules for PDF processing, citation, linking, uncertainty, and updates.
-- Create `index.md` and `log.md`.
+- Create `index.md`, `log.md`, `.research-kb/config.yaml`, and `.research-kb/index.json`.
 
-Success: raw PDFs can be detected from `raw/papers/`.
+Success: raw PDFs can be detected from `raw/papers/`, and the machine index can be refreshed from the Markdown graph.
 
 ### Phase 2: First 10 PDFs
 
@@ -503,6 +546,7 @@ Success: answers are useful using only the processed PDF vault.
 ### Phase 4: Vault Health
 
 - Add lint checks for unprocessed PDFs, missing metadata, missing summaries, orphan concepts, duplicate pages, and stale syntheses.
+- Add metadata reconciliation checks for duplicate/stale non-paper nodes, provider match confidence, and unresolved bibliographic conflicts.
 
 Success: the KB improves as it grows.
 
@@ -511,6 +555,7 @@ Success: the KB improves as it grows.
 Only after raw-PDF-first workflow proves useful:
 
 - Zotero/Better BibTeX plugin
+- Crossref/OpenAlex/Semantic Scholar metadata reconciliation
 - SQLite/FTS generated from Markdown
 - local embeddings
 - OpenAlex/Semantic Scholar discovery plugin
@@ -524,11 +569,12 @@ Only after raw-PDF-first workflow proves useful:
 4. Should raw-PDF paper notes be treated as trusted immediately, or as `needs_review` until checked?
 5. Should agents create new concept/variable/method pages freely, or only propose them?
 6. Should the Zotero plugin reconcile by DOI, title, PDF hash, or citekey?
-7. Should the first test focus on brainstorming, draft support, or question answering?
+7. Which metadata reconciliation actions should auto-apply, and which should always require researcher review?
+8. Should the first test focus on brainstorming, draft support, or question answering?
 
 ## 16. Current Recommendation
 
-Build v1 as a pure Obsidian vault with raw PDF intake.
+Build v1 as an Obsidian vault with raw PDF intake and optional metadata reconciliation.
 
 Use Markdown as the durable graph:
 
@@ -543,7 +589,7 @@ raw PDFs
   -> syntheses
 ```
 
-Do not add Zotero, SQLite, vector search, OpenAlex, Semantic Scholar, or write-back automation until the researcher has used the raw-PDF workflow with real papers.
+Do not add Zotero, SQLite, vector search, discovery automation, or write-back automation until the researcher has used the raw-PDF workflow with real papers. Crossref, OpenAlex, and Semantic Scholar may be added earlier as metadata reconciliation providers because they reduce duplicate/stale nodes without changing the evidence boundary.
 
 The first useful demo should be:
 
