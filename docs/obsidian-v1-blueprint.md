@@ -1,6 +1,6 @@
 # Obsidian V1 Blueprint: Sociolinguistics and Sociophonetics KB
 
-This blueprint describes a first build of the researcher's knowledge base using raw PDF intake, Obsidian, Markdown templates, and agents that operate on the vault. Zotero is treated as an optional plugin, not part of v1 core.
+This blueprint describes a first build of the researcher's knowledge base using raw PDF intake, Obsidian, Markdown templates, and agents that operate on the vault. Zotero is treated as an optional plugin, not part of v1 core. Crossref, OpenAlex, and Semantic Scholar may be used as optional bibliographic reconciliation providers, but not as evidence sources for claims.
 
 ## 1. Product Thesis
 
@@ -11,6 +11,7 @@ The v1 KB should be a personal scholarly memory system:
 - Obsidian becomes the human review, reading, and synthesis surface.
 - Agents help create, link, search, synthesize, and lint notes.
 - Zotero and external discovery tools can be added later as plugins.
+- Metadata reconciliation can use Crossref, OpenAlex, and Semantic Scholar to clean titles, author names, and duplicate nodes.
 
 The aim is not to automate scholarship. The aim is to make the researcher's curated reading compound over time.
 
@@ -21,6 +22,9 @@ raw/papers/
   -> PDF extraction
   -> bundled paper process agent understanding/summarization from extracted text
   -> papers/<paper_id>.md
+  -> optional Crossref/OpenAlex/Semantic Scholar metadata reconciliation
+  -> duplicate/stale node clustering
+  -> curator merge/archive review
   -> linked Obsidian notes
   -> agent search/synthesis workflows
 ```
@@ -32,11 +36,13 @@ V1 excludes:
 - Better BibTeX as a required dependency
 - SQLite graph
 - vector database
-- OpenAlex/Semantic Scholar as core KB inputs
+- OpenAlex/Semantic Scholar discovery as core KB input
 - Neo4j/RDF
 - web app/dashboard
 
 These may become later plugins, but they should not be part of the first build.
+
+Metadata reconciliation is narrower than discovery. It can confirm bibliographic identity for PDFs already supplied by the researcher, but it must not add external papers or claims to the KB.
 
 ## 3. Trust Boundary
 
@@ -48,6 +54,7 @@ Agents may:
 
 - read raw PDFs from `raw/papers/`
 - extract text and metadata
+- query Crossref, OpenAlex, or Semantic Scholar for bibliographic reconciliation
 - create or update Obsidian notes
 - propose links, summaries, findings, and synthesis
 - mark uncertainty clearly
@@ -57,6 +64,7 @@ Agents may not:
 - silently add external papers
 - modify Zotero
 - treat external search results as trusted evidence
+- use provider abstracts, snippets, or citation counts as evidence for scholarly claims
 - overwrite researcher-reviewed notes without preserving prior content or marking changes
 
 ## 4. Vault Layout
@@ -763,6 +771,9 @@ Agent checks:
 - paper note with no concept/variable/method/community links.
 - duplicate paper notes by hash, DOI, title, or filename.
 - duplicate concept or variable pages.
+- duplicate or invalid author/method/concept/variable/community candidate pages.
+- stale candidate pages with no live inbound paper links.
+- metadata reconciliation conflicts between PDF extraction, Crossref, OpenAlex, and Semantic Scholar.
 - orphan concept pages.
 - stale synthesis pages after new relevant papers were added.
 - research questions with no linked papers.
@@ -778,6 +789,8 @@ The vault should include an `AGENTS.md` with rules like:
 
 - Raw PDFs enter through `raw/papers/`.
 - Do not add external papers unless the user supplies the PDF.
+- Crossref, OpenAlex, and Semantic Scholar may be used only for bibliographic metadata reconciliation.
+- External provider records are not evidence for scholarly claims.
 - Zotero is optional plugin data, not v1 core authority.
 - Do not modify Zotero.
 
@@ -794,6 +807,7 @@ The vault should include an `AGENTS.md` with rules like:
 - Link concepts, variables, methods, and communities when they are substantively relevant.
 - Do not create duplicate pages; search first.
 - If a new page is useful but uncertain, create it with `status: candidate`.
+- Merge or archive duplicate/stale candidate nodes only when evidence is strong; otherwise report them for review.
 
 ## Synthesis
 
@@ -835,7 +849,37 @@ Plugin restrictions:
 - no direct writes to `zotero.sqlite`
 - no silent replacement of reviewed Markdown content
 
-## 13. MVP Test
+## 13. Metadata Reconciliation
+
+Metadata reconciliation is part of KB maintenance, not literature discovery.
+
+Providers:
+
+- Crossref for DOI, title, year, venue, and author metadata.
+- OpenAlex for work IDs, author IDs, institution hints, and alternate scholarly graph metadata. It must work without an API key; an API key may be configured optionally.
+- Semantic Scholar for secondary paper and author identity checks. Its API key is optional.
+
+Allowed actions:
+
+- add or confirm DOI, title, year, venue, and external IDs
+- normalize author display names when a paper match is high-confidence
+- cluster duplicate paper and non-paper notes
+- help the curator merge or archive OCR-damaged candidate nodes
+
+Forbidden actions:
+
+- add a paper the researcher did not place in `raw/papers/`
+- cite provider metadata as evidence in paper notes or syntheses
+- silently overwrite researcher-reviewed metadata
+
+Metadata cache and reports should live under:
+
+```text
+.research-kb/metadata-cache/
+.research-kb/reconciliation/
+```
+
+## 14. MVP Test
 
 Use 10 handpicked raw PDFs.
 
@@ -853,18 +897,19 @@ Test 3:
 
 The prototype succeeds if the researcher can inspect the answer in Obsidian and see exactly which processed paper notes it relied on.
 
-## 14. Later Upgrade Points
+## 15. Later Upgrade Points
 
 Add only after the raw-PDF-first workflow proves valuable:
 
 - Zotero/Better BibTeX plugin.
+- Crossref/OpenAlex/Semantic Scholar metadata reconciliation for duplicate and stale-node cleanup.
 - SQLite generated from Markdown for structured querying.
 - Local embeddings for fuzzy semantic search.
 - OpenAlex/Semantic Scholar discovery plugin for external candidate papers.
 - Zotero API/plugin write-back for low-risk status tags.
 - A web dashboard for review queues.
 
-## 15. Strong Recommendation
+## 16. Strong Recommendation
 
 Start with the boring version:
 

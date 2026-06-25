@@ -51,15 +51,17 @@ If macOS prompts for command line developer tools, install them and rerun the ch
 
 ## 2. Create a Python Environment
 
-The CLI is dependency-light, but real PDF extraction should use `pypdf`.
+The CLI is dependency-light, but real PDF extraction should use `pymupdf4llm`. `pypdf` remains a compatibility fallback.
 
 ```bash
 python3 -m venv ~/.venvs/research-kb
 source ~/.venvs/research-kb/bin/activate
 python -m pip install --upgrade pip
-python -m pip install pypdf
+python -m pip install pymupdf4llm pypdf
 python - <<'PY'
+import pymupdf4llm
 import pypdf
+print("pymupdf4llm ok")
 print("pypdf ok", pypdf.__version__)
 PY
 ```
@@ -68,6 +70,19 @@ Harnesses should prefer this Python executable when running the skill:
 
 ```bash
 ~/.venvs/research-kb/bin/python
+```
+
+Metadata reconciliation uses only Python standard-library HTTP clients, so it does not require extra Python packages. It does require network access when Crossref, OpenAlex, or Semantic Scholar lookups are enabled.
+
+Optional provider configuration:
+
+```bash
+# Optional but recommended for polite Crossref/OpenAlex usage.
+export RESEARCH_KB_MAILTO="you@example.com"
+
+# Optional. The command works without these keys using unauthenticated requests.
+export OPENALEX_API_KEY=""
+export SEMANTIC_SCHOLAR_API_KEY=""
 ```
 
 ## 3. Install the Skill
@@ -202,9 +217,24 @@ Apply results:
 Then refresh and check:
 
 ```bash
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" quality-guard
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" reconcile-metadata --mailto "$RESEARCH_KB_MAILTO"
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" curator-context
+# Run node curator subagents on "$VAULT/.research-kb/curator-tasks/"*.curator-task.json.
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" apply-curation "$VAULT/.research-kb/curator-results/"*.json
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" index
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" lint
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" build-report
 ```
+
+`reconcile-metadata` writes provider caches and audit reports under:
+
+```text
+$VAULT/.research-kb/metadata-cache/
+$VAULT/.research-kb/reconciliation/
+```
+
+By default it does not rewrite Markdown. Add `--apply` only when the harness should write high-confidence paper metadata updates to frontmatter. Provider metadata is for bibliographic cleanup and duplicate/stale-node detection only; it must not be used as evidence for scholarly claims.
 
 ## 8. Query Harness Contract
 
@@ -246,6 +276,7 @@ Any harness integrating this skill should enforce:
 
 - Do not add external papers unless the user supplies PDFs into `raw/papers/`.
 - Do not treat web search as KB evidence.
+- Treat Crossref, OpenAlex, and Semantic Scholar as metadata authorities only, not claim evidence.
 - Do not modify Zotero.
 - Do not write user content into the installed skill directory.
 - Preserve `raw_pdf_path` and `pdf_sha256`.
@@ -260,6 +291,8 @@ After adding one PDF to `raw/papers/`:
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" process --limit 1
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" agent-context --limit 1
 ls "$VAULT/.research-kb/agent-tasks/"*.agent-task.json
+~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" reconcile-metadata --limit 1 --mailto "$RESEARCH_KB_MAILTO"
+test -f "$VAULT/.research-kb/reconciliation/summary.json"
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" query "author name or paper topic" --mode idea
 ~/.venvs/research-kb/bin/python "$SKILL/scripts/research_kb.py" --vault "$VAULT" lint
 ```

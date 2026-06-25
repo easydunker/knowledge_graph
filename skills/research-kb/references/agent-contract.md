@@ -51,8 +51,13 @@ The `analysis` object must match the task's `expected_json_schema`. Required top
 - `limitations`
 - `useful_quotes`
 - `uncertain_fields`
+- `text_truncated_for_task_acknowledged`
+- `section_coverage`
+- `quality_self_check`
 
 Use empty strings or arrays when a field is not supported by the extracted text.
+
+The process agent must read the complete supplied `extracted_text` field. The task's `text_truncated_for_task` flag is authoritative. If it is false, the agent must not claim that the pipeline truncated the text.
 
 ## Edge Objects
 
@@ -97,3 +102,31 @@ Prefer `node_type` values `concept`, `variable`, `method`, or `community`.
 - Never write into the installed skill directory.
 - Do not add external papers or treat web search as KB evidence.
 - Preserve uncertainty and extraction limits in the JSON.
+
+## Node Curator Contract
+
+Input files are emitted by:
+
+```bash
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault curator-context
+```
+
+Each task describes one non-paper node and includes:
+
+- `agent`: `research-kb.node-curator`
+- `primary_goal`: `enrich_node_and_preserve_graph_integrity`
+- `node_path`, `node_type`, `node_status`, `node_title`
+- `existing_node_content`
+- `inbound_papers`
+- `stale_key_papers`
+- `related_nodes`
+- `expected_json_schema`
+- `result_path`
+
+The curator writes one JSON file per task under `.research-kb/curator-results/`.
+
+Curator results may update the target node, create active synthesis notes when evidence is strong, and propose high-confidence merge plans. The CLI applies the result with:
+
+```bash
+python3 <skill-dir>/scripts/research_kb.py --vault /path/to/vault apply-curation .research-kb/curator-results/*.json
+```

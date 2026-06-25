@@ -20,7 +20,8 @@ Core decisions:
 - Obsidian Markdown is the source of truth for the knowledge base.
 - Agents update only the Obsidian vault.
 - Zotero is not part of the v1 core; it should be designed as an optional plugin.
-- No SQLite, vector database, OpenAlex, or Semantic Scholar is required for the core v1.
+- No SQLite or vector database is required for the core v1.
+- Crossref, OpenAlex, and Semantic Scholar may be used as optional bibliographic metadata authorities for reconciliation, duplicate detection, and author/title cleanup. They are not evidence sources for KB claims.
 - The graph is expressed through Markdown links, frontmatter, tags, aliases, and relation-style bullets.
 - Paper processing is model-agnostic in the CLI. Paper understanding is an agent/subagent contract: export extracted-text tasks, let any harness model produce structured JSON, then apply it back to Markdown.
 - Deterministic extraction/enrichment remains available as an offline fallback and regression-test mode.
@@ -334,9 +335,11 @@ Plugin rules:
 
 This keeps the core KB usable even if the researcher does not configure Zotero.
 
-## 10. No Core OpenAlex or Semantic Scholar
+## 10. Metadata Reconciliation APIs
 
-OpenAlex and Semantic Scholar are useful for discovery, but they are not required for the trusted KB.
+Crossref, OpenAlex, and Semantic Scholar should be available as optional metadata reconciliation providers. Their purpose is to reduce duplicate or invalid notes caused by imperfect PDF extraction, especially OCR-damaged titles and author names.
+
+The trusted KB evidence boundary does not change. External provider records may clean bibliographic identity, but they must not add papers to the KB by themselves and must not support scholarly claims.
 
 Core KB answers should rely on:
 
@@ -345,7 +348,23 @@ Core KB answers should rely on:
 - concept/variable/method/community/question/synthesis notes
 - explicit citations and evidence in the vault
 
-Optional later discovery mode:
+Allowed reconciliation uses:
+
+- confirm DOI, title, year, venue, and author display names
+- store stable external IDs such as DOI, OpenAlex work/author IDs, and Semantic Scholar paper/author IDs
+- detect duplicate paper notes by DOI, title, year, author list, and stable provider IDs
+- detect duplicate or invalid author nodes caused by OCR or PDF extraction errors
+- provide candidate duplicate/stale-node clusters to the curator
+
+Provider policy:
+
+- Crossref is preferred for DOI/title/venue metadata and requires no API key.
+- OpenAlex is preferred for work IDs, author IDs, institutions, and broad scholarly graph metadata. It must work without an API key; an OpenAlex API key may be configured optionally.
+- Semantic Scholar is a secondary cross-check for paper and author identity. Its API key is optional.
+
+External metadata should be cached under `.research-kb/metadata-cache/` and reconciliation reports should be written under `.research-kb/reconciliation/`. These are build artifacts, not source-of-truth notes.
+
+Optional later discovery mode remains separate:
 
 ```text
 research idea/question
@@ -358,6 +377,8 @@ research idea/question
 
 External candidates should never be silently treated as KB evidence.
 
+See [Metadata Reconciliation Plan](metadata-reconciliation-plan.md).
+
 ## 11. No Core Vector DB or SQLite
 
 For v1, use Obsidian search, tags, links, and structured Markdown. A separate vector database or SQLite graph would add overhead before the note schema has proven itself.
@@ -367,6 +388,7 @@ Possible later upgrades:
 - SQLite generated from Markdown if structured queries become painful.
 - SQLite FTS if keyword search over notes needs to be automated outside Obsidian.
 - Local embeddings if fuzzy semantic search becomes important.
+- Crossref/OpenAlex/Semantic Scholar metadata reconciliation if duplicate detection and bibliographic cleanup need external identifiers.
 - OpenAlex/Semantic Scholar discovery plugin if literature discovery becomes a separate workflow.
 
 ## 12. Agent Workflows
@@ -382,7 +404,9 @@ Possible later upgrades:
 7. A Codex worker subagent running the bundled paper process agent analyzes the extracted text only and returns JSON matching the schema. If subagents are unavailable, another harness model or human can satisfy the same contract.
 8. CLI applies the returned analysis to add a concise summary, research question, data, variables, social factors, methods, findings, limitations, useful quotes, and evidence anchors.
 9. Agent proposes Markdown links and creates candidate graph nodes only when requested.
-10. Agent updates `index.md` and `log.md`.
+10. Optional metadata reconciliation checks Crossref, OpenAlex, and Semantic Scholar for bibliographic identity, title/author cleanup, and duplicate/stale candidate clusters.
+11. Curator agents review graph-integrity tasks, including duplicate or invalid non-paper notes, and propose high-confidence merge/archive actions.
+12. Agent updates `index.md` and `log.md`.
 
 ### Workflow B: Given an Idea, Find Papers and Directions
 
@@ -522,6 +546,7 @@ Success: answers are useful using only the processed PDF vault.
 ### Phase 4: Vault Health
 
 - Add lint checks for unprocessed PDFs, missing metadata, missing summaries, orphan concepts, duplicate pages, and stale syntheses.
+- Add metadata reconciliation checks for duplicate/stale non-paper nodes, provider match confidence, and unresolved bibliographic conflicts.
 
 Success: the KB improves as it grows.
 
@@ -530,6 +555,7 @@ Success: the KB improves as it grows.
 Only after raw-PDF-first workflow proves useful:
 
 - Zotero/Better BibTeX plugin
+- Crossref/OpenAlex/Semantic Scholar metadata reconciliation
 - SQLite/FTS generated from Markdown
 - local embeddings
 - OpenAlex/Semantic Scholar discovery plugin
@@ -543,11 +569,12 @@ Only after raw-PDF-first workflow proves useful:
 4. Should raw-PDF paper notes be treated as trusted immediately, or as `needs_review` until checked?
 5. Should agents create new concept/variable/method pages freely, or only propose them?
 6. Should the Zotero plugin reconcile by DOI, title, PDF hash, or citekey?
-7. Should the first test focus on brainstorming, draft support, or question answering?
+7. Which metadata reconciliation actions should auto-apply, and which should always require researcher review?
+8. Should the first test focus on brainstorming, draft support, or question answering?
 
 ## 16. Current Recommendation
 
-Build v1 as a pure Obsidian vault with raw PDF intake.
+Build v1 as an Obsidian vault with raw PDF intake and optional metadata reconciliation.
 
 Use Markdown as the durable graph:
 
@@ -562,7 +589,7 @@ raw PDFs
   -> syntheses
 ```
 
-Do not add Zotero, SQLite, vector search, OpenAlex, Semantic Scholar, or write-back automation until the researcher has used the raw-PDF workflow with real papers.
+Do not add Zotero, SQLite, vector search, discovery automation, or write-back automation until the researcher has used the raw-PDF workflow with real papers. Crossref, OpenAlex, and Semantic Scholar may be added earlier as metadata reconciliation providers because they reduce duplicate/stale nodes without changing the evidence boundary.
 
 The first useful demo should be:
 

@@ -25,14 +25,18 @@ Do not use web search, prior knowledge of the paper, DOI lookup, Zotero, or any 
 
 ## Procedure
 
-1. Verify the task is for one paper and has extracted text. If text is missing, extraction is poor, or `text_truncated_for_task` is true, return conservative fields and list the limitation in `uncertain_fields`.
-2. Identify the paper's purpose, research question, data/participants, methods, variables, social factors, and main findings from the extracted text only.
-3. Make `one_paragraph_summary` the strongest part of the output: summarize what the paper studies, what evidence/data it uses, how it analyzes the evidence, and what it concludes.
-4. Attach evidence anchors wherever possible. Convert `@@PAGE:N@@` markers to anchors such as `p. N`, `p. N, Table 2`, or `p. N, section heading`.
-5. For graph links, prefer existing nodes from `known_nodes`. Create new slugs only for substantive concepts, variables, methods, or communities that would be useful KB nodes. Use lowercase hyphen-case slugs.
-6. Mark weak or inferred claims in `uncertain_fields` or edge `uncertainty`. Do not smooth over contradictions, missing methods, or extraction gaps.
-7. Return all fields required by `expected_json_schema`. Use empty strings or empty arrays rather than omitting required keys.
-8. Write the result JSON to `result_path` if provided. Do not edit Markdown notes, indexes, PDFs, or other vault files.
+1. Verify the task is for one paper and has extracted text. Read the entire `extracted_text` field before writing conclusions.
+2. Treat `text_truncated_for_task` as authoritative. If it is `false`, do not claim pipeline truncation. If a section is absent despite full supplied text, report the specific reason in `uncertain_fields`, such as "results section not identifiable in extracted text."
+3. If text is missing, extraction is poor, or `text_truncated_for_task` is true, return conservative fields and list the limitation in `uncertain_fields`.
+4. Identify the paper's purpose, research question, data/participants, methods, variables, social factors, and main findings from the extracted text only.
+5. Make `one_paragraph_summary` the strongest part of the output: summarize what the paper studies, what evidence/data it uses, how it analyzes the evidence, and what it concludes.
+6. Attach evidence anchors wherever possible. Convert `@@PAGE:N@@` markers to anchors such as `p. N`, `p. N, Table 2`, or `p. N, section heading`. For Markdown extraction without page markers, use section, table, figure, or short quote anchors.
+7. For graph links, prefer existing nodes from `known_nodes`. Create new slugs only for substantive concepts, variables, methods, or communities that would be useful KB nodes. Use lowercase hyphen-case slugs.
+8. Mark weak or inferred claims in `uncertain_fields` or edge `uncertainty`. Do not smooth over contradictions, missing methods, or extraction gaps.
+9. Report `section_coverage` for methods, data, results, discussion, and conclusion.
+10. Set `quality_self_check.read_full_extracted_text` truthfully. Set `quality_self_check.truncation_claim_matches_task` to true only when your truncation claims match the task flag.
+11. Return all fields required by `expected_json_schema`. Use empty strings or empty arrays rather than omitting required keys.
+12. Write the result JSON to `result_path` if provided. Do not edit Markdown notes, indexes, PDFs, or other vault files.
 
 ## Output Envelope
 
@@ -60,7 +64,20 @@ Prefer this wrapper so `apply-analysis` can record agent provenance:
     "theoretical_contribution": [],
     "limitations": [],
     "useful_quotes": [],
-    "uncertain_fields": []
+    "uncertain_fields": [],
+    "text_truncated_for_task_acknowledged": false,
+    "section_coverage": {
+      "methods": "found",
+      "data": "found",
+      "results": "found",
+      "discussion": "not identifiable",
+      "conclusion": "found"
+    },
+    "quality_self_check": {
+      "read_full_extracted_text": true,
+      "evidence_anchors_present": true,
+      "truncation_claim_matches_task": true
+    }
   }
 }
 ```

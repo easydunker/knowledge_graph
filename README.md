@@ -40,7 +40,7 @@ The script is non-destructive by default: PDFs stay in `raw/papers/`. Use `--mov
 python3 scripts/kb.py process --move
 ```
 
-PDF text extraction uses `pypdf` when it is installed, which is strongly recommended for real research PDFs. Without `pypdf`, the script attempts a best-effort literal text extraction, still creates draft notes when possible, and records uncertainty in `text_extraction_status`, `metadata_confidence`, and `uncertain_fields`.
+PDF text extraction prefers `pymupdf4llm` when it is installed, producing LLM-ready Markdown for academic papers. `pypdf` remains a compatibility fallback. Without optional PDF libraries, the script attempts a best-effort literal text extraction, still creates draft notes when possible, and records uncertainty in `text_extraction_status`, `metadata_confidence`, and `uncertain_fields`.
 
 The core CLI does not call any model provider or require an API key. `process` creates hash-tracked paper-note drafts. For model-assisted understanding, export a portable agent task, let the current harness, subagent, or another skill produce the analysis JSON, then apply it back to the vault:
 
@@ -49,9 +49,15 @@ python3 scripts/kb.py process
 python3 scripts/kb.py agent-context
 # Run an agent/subagent/skill on .research-kb/agent-tasks/*.agent-task.json.
 python3 scripts/kb.py apply-analysis .research-kb/agent-results/*.json --create-nodes
+python3 scripts/kb.py quality-guard
+python3 scripts/kb.py reconcile-metadata
+python3 scripts/kb.py curator-context
+# Run an agent/subagent/skill on .research-kb/curator-tasks/*.curator-task.json.
+python3 scripts/kb.py apply-curation .research-kb/curator-results/*.json
+python3 scripts/kb.py build-report
 ```
 
-`enrich --create-nodes` remains available as a deterministic offline fallback for tests or quick drafts. The skill workflow should prefer `agent-context` plus `apply-analysis` when the host harness has an LLM or subagent system.
+`enrich --create-nodes` remains available as a deterministic offline fallback for tests or quick drafts. The skill workflow should prefer `agent-context` plus `apply-analysis`, followed by `quality-guard` and curator curation, when the host harness has an LLM or subagent system.
 
 The legacy entry point still works:
 
@@ -91,6 +97,7 @@ python3 scripts/evaluate_public_pdfs.py --python /path/to/python-with-pypdf
 - [Knowledge base design](docs/knowledge-base-design.md)
 - [Obsidian v1 blueprint](docs/obsidian-v1-blueprint.md)
 - [Installation guideline](docs/installation-guideline.md)
+- [Curator implementation plan](docs/curator-implementation-plan.md)
 - [Public PDF quality evaluation](docs/public-pdf-quality-evaluation.md)
 
 ## V1 Architecture
