@@ -1866,6 +1866,22 @@ def node_duplicate_score(left: Note, right: Note) -> tuple[float, list[str]]:
     return min(score, 1.0), signals
 
 
+def duplicate_merge_rank(root: Path, note: Note, notes: list[Note]) -> tuple[int, int, int, int]:
+    status = str(note.frontmatter.get("status", "")).strip()
+    status_rank = {"reviewed": 5, "active": 4, "working": 3, "candidate": 1, "": 0}.get(status, 2)
+    curated_rank = 1 if str(note.frontmatter.get("curated_by", "")).strip() else 0
+    inbound_rank = len(inbound_live_links(root, note, notes))
+    return (status_rank, curated_rank, inbound_rank, len(note.text))
+
+
+def choose_duplicate_merge_nodes(root: Path, left: Note, right: Note, notes: list[Note]) -> tuple[Note, Note]:
+    left_rank = duplicate_merge_rank(root, left, notes)
+    right_rank = duplicate_merge_rank(root, right, notes)
+    if left_rank >= right_rank:
+        return right, left
+    return left, right
+
+
 def duplicate_node_clusters(root: Path, notes: list[Note]) -> list[dict[str, Any]]:
     clusters: list[dict[str, Any]] = []
     node_notes = [note for note in notes if note.note_type in {"author", "concept", "variable", "method", "community"}]
@@ -1879,12 +1895,7 @@ def duplicate_node_clusters(root: Path, notes: list[Note]) -> list[dict[str, Any
             left_refs = inbound_live_links(root, left, notes)
             right_refs = inbound_live_links(root, right, notes)
             confidence = "high" if score >= 0.93 or (score >= 0.84 and set(left_refs) & set(right_refs)) else "medium"
-            target = left
-            source = right
-            if str(left.frontmatter.get("status", "")) == "candidate" and str(right.frontmatter.get("status", "")) != "candidate":
-                source, target = left, right
-            elif len(right.text) > len(left.text) and str(left.frontmatter.get("status", "")) == "candidate":
-                source, target = left, right
+            source, target = choose_duplicate_merge_nodes(root, left, right, notes)
             clusters.append(
                 {
                     "schema_version": 1,
@@ -2012,6 +2023,11 @@ def reconciliation_records_for_node(root: Path, node: Note, limit: int = 10) -> 
             if payload_mentions_node(payload):
                 result[key].append(payload)
     return result
+
+
+def has_reconciliation_work(root: Path, node: Note) -> bool:
+    records = reconciliation_records_for_node(root, node, limit=1)
+    return any(records.get(key) for key in records)
 
 
 def write_probe_indexes(root: Path, notes: list[Note]) -> None:
@@ -4017,7 +4033,7 @@ def command_curator_context(args: argparse.Namespace) -> int:
         for note in notes:
             if note.note_type in {"author", "concept", "variable", "method", "community"}:
                 inbound = inbound_paper_records(note, notes, max_papers=1)
-                if inbound:
+                if inbound or has_reconciliation_work(root, note):
                     selected.append(note)
     if args.limit:
         selected = selected[: args.limit]
