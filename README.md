@@ -1,191 +1,196 @@
-# Sociolinguistics and Sociophonetics KB V1
+# Research KB Agent Skill
 
-This is an Obsidian-first research knowledge base for sociolinguistics and sociophonetics. V1 is raw-PDF-first: drop handpicked papers into `raw/papers/`, run deterministic intake, then use resumable model-agent batches to build source-grounded Markdown notes and a curated Obsidian graph.
+This repository packages `research-kb`, a reusable agent skill for building and maintaining an Obsidian-first research knowledge base from researcher-supplied PDFs.
 
-## Tool vs Vault
+The repo is not intended to be the user's knowledge-base vault. It contains the skill instructions, templates, scripts, agent contracts, and design documentation that an agent harness can install and use against a separate user-selected vault.
 
-The reusable skill is tooling. It can live in `~/.codex/skills/research-kb/` or in this development repo.
+## What The Skill Does
 
-The knowledge-base content should live in a separate user-selected Obsidian vault root, for example `~/Documents/research-kb/` or a project-specific research folder. That vault root contains `raw/papers/`, `papers/`, `concepts/`, `index.md`, `.research-kb/`, and the rest of the user's notes.
+`research-kb` helps an agent harness:
 
-For an installed skill, bootstrap a selected vault with:
+- bootstrap a local Obsidian vault for research notes
+- ingest user-supplied PDFs from `raw/papers/`
+- create hash-tracked paper notes that preserve `raw_pdf_path` and `pdf_sha256`
+- export model-agnostic paper-processing tasks for LLM subagents
+- resume quota-limited processing through vault-local job ledgers
+- apply paper-process results only after validation and quality checks
+- reconcile bibliographic metadata with Crossref, OpenAlex, and Semantic Scholar
+- curate author, concept, variable, method, community, and synthesis notes
+- query the curated vault for topic, author, citation-support, and previous-studies workflows
+- lint, review, repair, and report on KB integrity
 
-```bash
-VAULT="$HOME/Documents/research-kb"
-python3 ~/.codex/skills/research-kb/scripts/research_kb.py --vault "$VAULT" init
-```
+The CLI bundled in the skill is model-agnostic. It does not call an LLM provider or require an LLM API key. Model reasoning is handled by the host harness or subagents through JSON task/result contracts.
 
-For this development repo's wrapper, pass `--vault` when targeting a separate content vault:
+## Repo vs Vault
 
-```bash
-python3 scripts/kb.py --vault "$VAULT" init
-```
+Keep these separate:
 
-## Quick Start for This Demo Vault
+- **This repository / installed skill:** reusable tooling, templates, scripts, references, and agent definitions.
+- **User-selected vault:** the actual knowledge-base content, including PDFs, Markdown notes, Obsidian settings, `.research-kb/` state, indexes, task files, result files, and reports.
 
-1. Open this folder as an Obsidian vault.
-2. Drop PDF papers into `raw/papers/`.
-3. Run:
-
-```bash
-python3 scripts/kb.py process
-```
-
-4. Review generated notes in `papers/`.
-5. Use links and relation-style bullets to connect papers to concepts, variables, methods, communities, questions, and syntheses.
-
-The script is non-destructive by default: PDFs stay in `raw/papers/`. Use `--move` if you want successfully processed PDFs moved to `raw/processed/`.
-
-```bash
-python3 scripts/kb.py process --move
-```
-
-PDF text extraction prefers `pymupdf4llm` when it is installed, producing LLM-ready Markdown for academic papers. `pypdf` remains a compatibility fallback. Without optional PDF libraries, the script attempts a best-effort literal text extraction, still creates draft notes when possible, and records uncertainty in `text_extraction_status`, `metadata_confidence`, and `uncertain_fields`.
-
-The core CLI does not call any model provider or require an LLM API key. `process` creates hash-tracked paper-note drafts. For model-assisted understanding, use the quota-resilient `build-jobs` workflow: export a small batch, let the current harness, subagent, or another skill produce result JSON files, then apply them back to the vault. A paper job is considered complete only after the result is applied and `quality-guard` passes.
-
-```bash
-python3 scripts/kb.py process
-python3 scripts/kb.py build-jobs refresh
-python3 scripts/kb.py build-jobs status
-python3 scripts/kb.py build-jobs export-paper --batch-size 10
-# Run an agent/subagent/skill on .research-kb/agent-tasks/paper/*.agent-task.json.
-python3 scripts/kb.py build-jobs apply-paper
-python3 scripts/kb.py reconcile-metadata --apply
-python3 scripts/kb.py build-jobs export-curator --batch-size 20
-# Run an agent/subagent/skill on .research-kb/curator-tasks/jobs/*.curator-task.json.
-python3 scripts/kb.py build-jobs apply-curator
-python3 scripts/kb.py build-report
-```
-
-Rerun `build-jobs status` whenever quota runs out or the harness is interrupted. The vault-local ledgers under `.research-kb/jobs/` remember which jobs are pending, exported, applied, quality-passed, quality-failed, or ready for retry.
-
-`enrich --create-nodes` remains available as a deterministic offline fallback for tests or quick drafts. The lower-level `agent-context`, `apply-analysis`, `quality-guard`, `curator-context`, and `apply-curation` commands remain available for harnesses that already have their own queue system.
-
-The legacy entry point still works:
-
-```bash
-python3 scripts/process_raw_pdfs.py
-```
-
-## KB Helper CLI
-
-The reusable helper covers the main v1 lifecycle:
-
-```bash
-python3 scripts/kb.py init
-python3 scripts/kb.py index
-python3 scripts/kb.py process
-python3 scripts/kb.py build-jobs refresh
-python3 scripts/kb.py build-jobs status
-python3 scripts/kb.py build-jobs export-paper --batch-size 10
-python3 scripts/kb.py build-jobs apply-paper
-python3 scripts/kb.py reconcile-metadata --apply
-python3 scripts/kb.py build-jobs export-curator --batch-size 20
-python3 scripts/kb.py build-jobs apply-curator
-python3 scripts/kb.py build-report
-python3 scripts/kb.py enrich --create-nodes
-python3 scripts/kb.py query "rhotics, gender, and identity" --mode idea
-python3 scripts/kb.py query "draft paragraph or claim" --mode draft
-python3 scripts/kb.py review
-python3 scripts/kb.py lint
-python3 scripts/kb.py lint --fix
-```
-
-The same engine is bundled as an installable Codex skill under `skills/research-kb/`.
-Copy that folder into another user's `~/.codex/skills/` to make `$research-kb` available.
-
-`enrich` is conservative: it fills draft paper-note sections from extracted PDF text, marks inferred graph edges as `#candidate`, creates missing candidate nodes only with `--create-nodes`, and keeps notes in `needs_review` until a researcher checks them.
-
-To run the public-PDF quality evaluation in a temporary vault:
-
-```bash
-python3 scripts/evaluate_public_pdfs.py --python /path/to/python-with-pypdf
-```
-
-## Project Docs
-
-- [Knowledge base design](docs/knowledge-base-design.md)
-- [Obsidian v1 blueprint](docs/obsidian-v1-blueprint.md)
-- [Installation guideline](docs/installation-guideline.md)
-- [Curator implementation plan](docs/curator-implementation-plan.md)
-- [Quota-resilient build plan](docs/quota-resilient-build-plan.md)
-- [Public PDF quality evaluation](docs/public-pdf-quality-evaluation.md)
-
-## V1 Architecture
+A typical user vault contains:
 
 ```text
+AGENTS.md
+index.md
+log.md
 raw/papers/
-  -> PDF extraction
-  -> papers/<paper_id>.md
-  -> .research-kb/jobs/*.jsonl
-  -> paper-process agent tasks/results
-  -> quality-passed paper notes
-  -> metadata reconciliation
-  -> curator agent tasks/results
-  -> linked Obsidian graph notes
-  -> .research-kb/index.json + .research-kb/search/*.jsonl
-  -> agent search/synthesis workflows
+papers/
+authors/
+concepts/
+variables/
+methods/
+communities/
+questions/
+syntheses/
+.research-kb/
 ```
 
-Zotero is not required for v1. A future optional integration can live under `plugins/zotero/`.
+The installed skill should never store a user's PDFs or KB content inside the skill directory.
 
-## Index Locations
+## Installation
 
-`index.md` lives at the vault root and is the human-facing Obsidian entry point.
+Install or copy `skills/research-kb/` into the harness's Codex skills directory, usually:
 
-`.research-kb/index.json` is the machine-maintained cache regenerated from the Markdown notes by `init`, `index`, `process`, `enrich`, `query --save`, `new-node`, and `lint --fix`.
+```text
+~/.codex/skills/research-kb/
+```
 
-`.research-kb/jobs/*.jsonl`, `.research-kb/agent-tasks/`, `.research-kb/agent-results/`, `.research-kb/curator-tasks/`, `.research-kb/curator-results/`, `.research-kb/metadata-cache/`, and `.research-kb/reconciliation/` are vault-local machine state for builds and resumes.
+For a full Mac-oriented setup, including Python environment checks and optional PDF extraction dependencies, see:
 
-The Markdown notes remain the source of truth. Machine indexes, job ledgers, task files, result files, and provider caches are disposable or regenerable tool state.
+- [INSTALL.md](INSTALL.md)
+
+Recommended optional Python packages for real PDFs:
+
+- `pymupdf4llm`
+- `pypdf`
+
+`pymupdf4llm` is preferred because it extracts LLM-ready Markdown from academic PDFs. The skill remains graceful when optional PDF libraries are unavailable, but output quality may be lower.
+
+## Harness Workflow
+
+The intended user experience is:
+
+1. The user selects a vault root outside this repo.
+2. The user places PDFs in the vault's `raw/papers/`.
+3. The agent harness invokes the `research-kb` skill.
+4. The skill initializes or refreshes the vault scaffold.
+5. Deterministic intake creates conservative draft paper notes.
+6. The harness exports a small batch of paper-process jobs.
+7. Paper-process subagents read one task each and write result JSON only.
+8. The skill applies results, creates candidate graph nodes, and runs quality guard.
+9. A paper is considered processed only after its result is applied and quality guard passes.
+10. The harness repeats batches until the build queue is complete.
+11. Metadata reconciliation cleans high-confidence bibliographic fields and detects duplicate or stale nodes.
+12. Curator subagents enrich non-paper notes and propose high-confidence merge/archive plans.
+13. The skill refreshes indexes, writes a build report, and leaves review items for the researcher.
+
+The quota-resilient queue is the default for Codex-like harnesses. It records state under the user's vault:
+
+```text
+.research-kb/jobs/
+  paper-process.jsonl
+  node-curation.jsonl
+  build-runs.jsonl
+  status.json
+```
+
+This lets later runs resume without the root harness remembering which PDFs were already processed.
+
+## Agent Contracts
+
+The skill includes bundled agent contracts and references:
+
+- `research-kb.paper-process`: understands one paper from one exported task JSON and writes one result JSON.
+- `research-kb.node-curator`: enriches one non-paper node from quality-passed paper evidence and reconciliation records.
+- `research-kb.query`: supports clue-based search over the generated index.
+- `research-kb.claim-support`: suggests supporting, complicating, contradictory, or missing KB evidence for draft prose.
+- `research-kb.synthesis`: discusses previous studies from bounded retrieval over the current KB.
+
+Each worker should be scoped to one task or bounded retrieval packet. Subagents should not edit Markdown notes directly; they write JSON to the task's `result_path`, and the CLI applies validated results.
+
+## Evidence Policy
+
+The Markdown vault is the source of truth for KB claims.
+
+Rules:
+
+- Raw PDFs enter through `raw/papers/`.
+- Do not add external papers unless the user supplies the PDF.
+- Do not modify Zotero.
+- Do not treat web search results as trusted KB evidence.
+- Crossref, OpenAlex, and Semantic Scholar may be used only for bibliographic reconciliation, duplicate detection, and author/title cleanup.
+- Provider metadata is not evidence for scholarly claims.
+- Quality-failed paper notes remain searchable, but curation and synthesis should not use them as evidence unless the harness loads full extracted/source text and clearly warns about quality state.
 
 ## Graph Model
 
-Nodes are Markdown notes. The `type` field in frontmatter defines the node type:
+Nodes are Markdown notes. Important node types include:
 
 - `paper`
+- `author`
 - `concept`
 - `variable`
 - `method`
 - `community`
-- `author`
 - `research_question`
 - `synthesis`
 
-Edges are typed wikilinks:
+Edges are typed wikilinks in Markdown, for example:
 
 ```markdown
+- authored_by:: [[authors/example-author]]
 - studies_variable:: [[variables/mandarin-rhotics]]
 - uses_method:: [[methods/mixed-effects-models]]
 - supports:: [[concepts/indexicality]]
 ```
 
-Paper notes should contain a small graph in their relation sections so agents can retrieve evidence paths instead of only keyword matches.
+Typed links let the harness retrieve evidence paths instead of relying only on keyword search.
 
-## Main Workflows
+## Machine State
 
-- Process raw PDFs into paper notes.
-- Resume quota-limited paper processing from `.research-kb/jobs/`.
-- Mark paper processing complete only after applied analysis passes quality guard.
-- Reconcile bibliographic metadata with Crossref, OpenAlex, and Semantic Scholar without treating provider metadata as claim evidence.
-- Curate author, concept, variable, method, and community nodes from quality-passed paper evidence.
-- Given an idea, find relevant papers and suggest directions.
-- Given writing, suggest supporting or complicating citations.
-- Given a question, find relevant papers and synthesize what the current KB says.
-- Lint the vault for missing notes, orphan nodes, duplicate concepts, and stale syntheses.
+The user vault may contain generated machine state:
 
-## Suggested First Test
-
-Drop 10 handpicked PDFs into `raw/papers/`, run the resumable build workflow in batches, review the generated notes, then ask:
-
-```bash
-python3 scripts/kb.py process
-python3 scripts/kb.py build-jobs refresh
-python3 scripts/kb.py build-jobs export-paper --batch-size 5
-# Run paper-process workers on exported tasks, then:
-python3 scripts/kb.py build-jobs apply-paper
-python3 scripts/kb.py build-jobs status
+```text
+.research-kb/index.json
+.research-kb/search/*.jsonl
+.research-kb/jobs/*.jsonl
+.research-kb/agent-tasks/
+.research-kb/agent-results/
+.research-kb/curator-tasks/
+.research-kb/curator-results/
+.research-kb/quality-reports/
+.research-kb/metadata-cache/
+.research-kb/reconciliation/
 ```
 
-> Given this research idea, what papers in my curated KB are relevant, what do they support, and what directions could I pursue?
+These files support indexing, resumable builds, agent handoff, quality reports, metadata reconciliation, and query probing. They are vault-local tool state, not the scholarly source of truth.
+
+## Project Docs
+
+- [Knowledge base design](docs/knowledge-base-design.md)
+- [Obsidian v1 blueprint](docs/obsidian-v1-blueprint.md)
+- [Installation guide](INSTALL.md)
+- [Curator implementation plan](docs/curator-implementation-plan.md)
+- [Quota-resilient build plan](docs/quota-resilient-build-plan.md)
+- [Metadata reconciliation plan](docs/metadata-reconciliation-plan.md)
+- [Query architecture](docs/query-architecture.md)
+- [Public PDF quality evaluation](docs/public-pdf-quality-evaluation.md)
+
+## Repository Layout
+
+```text
+skills/research-kb/        reusable Codex skill package
+skills/research-kb/SKILL.md
+skills/research-kb/scripts/
+skills/research-kb/agents/
+skills/research-kb/references/
+skills/research-kb/templates/
+docs/                      design notes and implementation plans
+scripts/                   development wrappers and evaluation helpers
+plugins/                   optional future integrations
+```
+
+## Development Notes
+
+This repo includes development wrappers and evaluation helpers, but the canonical installed artifact is `skills/research-kb/`. When changing workflow behavior, update the skill instructions, references, installation guide, and design docs together so future harnesses receive a coherent skill package.
