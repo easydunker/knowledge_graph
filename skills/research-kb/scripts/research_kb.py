@@ -1349,7 +1349,7 @@ def parse_vault_path(value: str) -> Path:
     """Return an external vault path and reject the installed skill itself."""
     root = Path(value).expanduser().resolve()
     package = skill_root().resolve()
-    if root == package or package in root.parents:
+    if root == package or package in root.parents or root in package.parents:
         raise argparse.ArgumentTypeError(
             "--vault must be outside the installed research-kb skill directory; choose a separate user vault"
         )
@@ -5099,7 +5099,7 @@ def migration_sources(source: Path) -> list[Path]:
         elif item.is_file() and item.name in MIGRATABLE_ROOT_FILES:
             # A package README explains the tool, rather than the researcher's
             # vault; let init create a correct vault README in that case.
-            if legacy and item.name == "README.md":
+            if legacy and item.name in {"README.md", "AGENTS.md"}:
                 continue
             selected.append(item)
         elif item.is_file() and item.suffix.lower() == ".md" and not legacy:
@@ -5447,6 +5447,8 @@ def query_vault(root: Path, query: str, mode: str, limit: int) -> str:
 
 def save_query_note(root: Path, output: str, query: str, save_path: str) -> str:
     target = vault_relative_path(root, save_path, "--save")
+    if target == root:
+        raise ValueError("--save must name a file inside the selected vault")
     if target.suffix != ".md":
         target = target.with_suffix(".md")
     ensure_dir(target.parent)
@@ -6137,7 +6139,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_context_parser = sub.add_parser("agent-context", help="Export model-agnostic paper-analysis task JSON for an external agent or subagent.")
     agent_context_parser.add_argument("--note", help="Paper note path, stem, or wikilink. Defaults to draft paper notes.")
-    agent_context_parser.add_argument("--output-dir", default=f"{MACHINE_DIR}/agent-tasks", help="Vault-relative or absolute directory for task JSON files.")
+    agent_context_parser.add_argument("--output-dir", default=f"{MACHINE_DIR}/agent-tasks", help="Vault-relative directory for task JSON files.")
     agent_context_parser.add_argument("--max-chars", type=int, default=DEFAULT_AGENT_MAX_CHARS, help="Maximum extracted PDF text characters to include. Use 0 for the full retained extracted text.")
     agent_context_parser.add_argument("--limit", type=int, default=0, help="Maximum number of paper tasks to export.")
     agent_context_parser.add_argument("--all", action="store_true", help="Export all paper notes, including notes whose sections are already filled.")
@@ -6174,7 +6176,7 @@ def build_parser() -> argparse.ArgumentParser:
     curator_context_parser = sub.add_parser("curator-context", help="Export node curator task JSON for affected non-paper nodes.")
     curator_context_parser.add_argument("--nodes", nargs="*", help="Specific node paths, stems, or wikilinks. Defaults to all nodes with inbound quality-passed papers.")
     curator_context_parser.add_argument("--mode", choices=["initial-build", "incremental-build"], default="incremental-build")
-    curator_context_parser.add_argument("--output-dir", default=CURATOR_TASK_DIR, help="Vault-relative or absolute directory for curator task JSON files.")
+    curator_context_parser.add_argument("--output-dir", default=CURATOR_TASK_DIR, help="Vault-relative directory for curator task JSON files.")
     curator_context_parser.add_argument("--max-papers", type=int, default=20, help="Maximum inbound paper evidence packets per curator task.")
     curator_context_parser.add_argument("--limit", type=int, default=0, help="Maximum number of curator tasks to export.")
     curator_context_parser.set_defaults(func=command_curator_context)

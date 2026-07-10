@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -86,6 +87,10 @@ class PackageTests(unittest.TestCase):
             self.assertNotEqual(inside.returncode, 0)
             self.assertFalse((installed / "index.md").exists())
 
+            contains_skill = run_cli(installed, "--vault", str(temp_path), "init")
+            self.assertNotEqual(contains_skill.returncode, 0)
+            self.assertFalse((temp_path / "index.md").exists())
+
             vault = temp_path / "researcher-vault"
             for command in ("init", "lint", "index"):
                 result = run_cli(installed, "--vault", str(vault), command)
@@ -94,6 +99,10 @@ class PackageTests(unittest.TestCase):
             self.assertNotIn("scripts/kb.py", vault_readme)
             self.assertTrue((vault / "index.md").is_file())
             self.assertFalse((vault / "plugins" / "zotero").exists())
+
+            escaped_save = run_cli(installed, "--vault", str(vault), "query", "missing", "--save", ".")
+            self.assertNotEqual(escaped_save.returncode, 0)
+            self.assertFalse((temp_path / "researcher-vault.md").exists())
 
     def test_migration_is_non_destructive_and_excludes_package_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -106,6 +115,7 @@ class PackageTests(unittest.TestCase):
             (source / "skills" / "research-kb" / "SKILL.md").write_text("legacy package", encoding="utf-8")
             (source / "index.md").write_text("# My KB", encoding="utf-8")
             (source / "log.md").write_text("# My Log", encoding="utf-8")
+            (source / "AGENTS.md").write_text("# Package Contributor Rules", encoding="utf-8")
             (source / "papers" / "one.md").write_text("# One", encoding="utf-8")
             (source / "raw" / "papers" / "one.pdf").write_bytes(b"researcher supplied PDF")
             (source / "docs").mkdir()
@@ -123,6 +133,7 @@ class PackageTests(unittest.TestCase):
             self.assertFalse((destination / "skills").exists())
             self.assertFalse((destination / "docs").exists())
             self.assertTrue((destination / "archive" / "migration" / "legacy-index.md").is_file())
+            self.assertFalse((destination / "archive" / "migration" / "legacy-AGENTS.md").exists())
             self.assertIn("Research KB Index", (destination / "index.md").read_text(encoding="utf-8"))
             self.assertTrue((destination / ".research-kb" / "reports" / "migration-report.json").is_file())
             for command in ("lint", "index", "build-report"):
@@ -140,6 +151,12 @@ class PackageTests(unittest.TestCase):
             result = run_cli(SKILL, "--vault", str(destination), "migrate", "--source", str(source), "--apply")
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual((destination / "keep.md").read_text(encoding="utf-8"), "do not overwrite")
+
+            destination_file = temp_path / "destination-file"
+            destination_file.write_text("not a vault", encoding="utf-8")
+            file_result = run_cli(SKILL, "--vault", str(destination_file), "migrate", "--source", str(source), "--apply")
+            self.assertNotEqual(file_result.returncode, 0)
+            self.assertEqual(destination_file.read_text(encoding="utf-8"), "not a vault")
 
     def test_migration_cleans_staging_after_a_copy_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -159,10 +176,30 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(list(temp_path.glob(".destination.migration-*")), [])
 
     def test_default_worker_globs_match_job_export_paths(self) -> None:
-        paper_agent = (SKILL / "agents" / "paper-process.yaml").read_text(encoding="utf-8")
-        curator_agent = (SKILL / "agents" / "node-curator.yaml").read_text(encoding="utf-8")
-        self.assertIn(".research-kb/agent-tasks/paper/*.agent-task.json", paper_agent)
-        self.assertIn(".research-kb/curator-tasks/jobs/*.curator-task.json", curator_agent)
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp) / "vault"
+            self.assertEqual(run_cli(SKILL, "--vault", str(vault), "init").returncode, 0)
+            (vault / "raw" / "papers" / "demo.pdf").write_bytes(b"plain text extraction fallback")
+            self.assertEqual(run_cli(SKILL, "--vault", str(vault), "process").returncode, 0)
+            self.assertEqual(run_cli(SKILL, "--vault", str(vault), "build-jobs", "export-paper", "--batch-size", "1").returncode, 0)
+
+            paper_task = next((vault / ".research-kb" / "agent-tasks" / "paper").glob("*.agent-task.json"))
+            paper_pattern = re.search(r'input_glob: "([^"]+)"', (SKILL / "agents" / "paper-process.yaml").read_text(encoding="utf-8"))
+            assert paper_pattern
+            self.assertTrue(PurePosixPath(paper_task.relative_to(vault).as_posix()).match(paper_pattern.group(1)))
+
+            self.assertEqual(run_cli(SKILL, "--vault", str(vault), "new-node", "variable", "Demo").returncode, 0)
+            paper_path = next((vault / "papers").glob("*.md"))
+            paper_text = paper_path.read_text(encoding="utf-8")
+            paper_text = paper_text.replace('"quality":{"state":"pending"}', '"quality":{"state":"passed"}')
+            paper_text = paper_text.replace("- studies_variable::\n", "- studies_variable:: [[variables/demo]]\n", 1)
+            paper_path.write_text(paper_text, encoding="utf-8")
+            self.assertEqual(run_cli(SKILL, "--vault", str(vault), "build-jobs", "export-curator", "--batch-size", "1").returncode, 0)
+
+            curator_task = next((vault / ".research-kb" / "curator-tasks" / "jobs").glob("*.curator-task.json"))
+            curator_pattern = re.search(r'input_glob: "([^"]+)"', (SKILL / "agents" / "node-curator.yaml").read_text(encoding="utf-8"))
+            assert curator_pattern
+            self.assertTrue(PurePosixPath(curator_task.relative_to(vault).as_posix()).match(curator_pattern.group(1)))
 
 
 if __name__ == "__main__":

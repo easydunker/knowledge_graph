@@ -25,10 +25,11 @@ For a non-technical researcher, the normal request is simply: **"Build my resear
 
 When Codex subagents are available, process PDFs with the bundled paper process agent by default. For quota-constrained harnesses, prefer the resumable `build-jobs` workflow: export a small batch, spawn `research-kb.paper-process` workers for that batch, apply returned results, run quality guard automatically, then resume later from the vault-local job ledger. `agent-context` and `build-jobs export-paper` include the full retained extracted text by default. Use `--max-chars <N>` only when a smaller/local harness needs an explicit task-size cap; `--max-chars 0` means no task-level cap.
 
+For a new vault:
+
 ```bash
-VAULT="/path/to/user-selected-vault"
+VAULT="/path/to/new-user-vault"
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" init
-python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" migrate --source /path/to/old-vault
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" index
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" process
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-jobs refresh
@@ -43,6 +44,19 @@ python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" query "rhotics, gend
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" review
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" lint
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" lint --fix
+```
+
+For an existing vault or legacy repo-as-vault, migrate before running any other
+vault command:
+
+```bash
+OLD_VAULT="/path/to/old-vault"
+VAULT="/path/to/new-user-vault"
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" migrate --source "$OLD_VAULT"
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" migrate --source "$OLD_VAULT" --apply
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" lint
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" index
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-report
 ```
 
 For real PDFs, prefer a Python environment with `pymupdf4llm` and `pypdf` installed. `pymupdf4llm` is the preferred extraction backend because it produces LLM-ready Markdown; `pypdf` remains a compatibility fallback. If optional PDF libraries are unavailable, the CLI still creates conservative hash-tracked drafts and marks uncertain extraction fields for review.

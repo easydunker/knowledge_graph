@@ -26,9 +26,11 @@ commands or edit configuration.
   Obsidian settings, archive, and vault-local tool state.
 - It excludes Git data, symlinks, installed skill source, developer docs, and
   scripts from a legacy checkout.
-- For a legacy checkout, it preserves the old root `AGENTS.md`, `index.md`, and
-  `log.md` under `archive/migration/`, then creates current vault scaffold
-  files so stale package links and rules do not become the active vault setup.
+- For a legacy checkout, it preserves the old root `index.md` and `log.md`
+  under `archive/migration/`, skips the package contributor `AGENTS.md`, and
+  creates current vault scaffold files so stale package links and rules do not
+  become the active vault setup. A standalone vault's user-authored
+  `AGENTS.md` remains migratable.
 - The destination must be empty and must not nest inside the source. This
   prevents accidental merging or recursive copies.
 - Migration first writes to a temporary sibling folder and publishes it only
