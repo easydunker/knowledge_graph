@@ -5,8 +5,8 @@ role:
   name: "research-kb.paper-process"
   task: "research_kb_paper_analysis"
   main_goal: "understand_and_summarize_input_paper"
-  input_glob: ".research-kb/agent-tasks/*.agent-task.json"
-  output_dir: ".research-kb/agent-results"
+  input_glob: ".research-kb/agent-tasks/paper/*.agent-task.json"
+  output_dir: ".research-kb/agent-results/paper"
   canonical_instructions: "../references/paper-process-agent.md"
   output_contract: "../references/agent-contract.md"
   notes:

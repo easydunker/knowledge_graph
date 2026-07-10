@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 import unicodedata
 import urllib.error
@@ -129,8 +130,28 @@ REQUIRED_DIRS = [
     "archive/merged",
     "archive/invalid",
     "templates",
-    "plugins/zotero",
 ]
+
+# Only these paths are copied by `migrate`. They are user-vault material, not
+# package material; keeping the allowlist small prevents a legacy checkout from
+# carrying its skill source, Git history, or developer docs into a new vault.
+MIGRATABLE_DIRS = {
+    ".obsidian",
+    MACHINE_DIR,
+    "raw",
+    "papers",
+    "authors",
+    "concepts",
+    "variables",
+    "methods",
+    "communities",
+    "questions",
+    "syntheses",
+    "archive",
+    "templates",
+    "plugins",
+}
+MIGRATABLE_ROOT_FILES = {"AGENTS.md", "index.md", "log.md", "README.md"}
 
 STOPWORDS = {
     "a",
@@ -746,22 +767,21 @@ node_folders:
   synthesis: syntheses
 """
 
-README_TEXT = """# Sociolinguistics and Sociophonetics KB Vault
+README_TEXT = """# Research Knowledge Base Vault
 
 This folder is the user-selected Obsidian vault that stores KB content. The
 Codex skill and helper scripts are reusable tooling and may live elsewhere,
 such as `~/.codex/skills/research-kb/`.
 
 Open this folder as an Obsidian vault. Drop researcher-selected PDFs into
-`raw/papers/`, then use the KB helper with `--vault /path/to/this-vault` to
-process, query, lint, and repair the Markdown knowledge base.
+`raw/papers/`, then ask your agent to use the installed `research-kb` skill to
+build, query, review, or repair this knowledge base. The agent should operate
+on this vault path and should not write KB content into its skill directory.
 
 ```bash
-python3 scripts/kb.py init
-python3 scripts/kb.py index
-python3 scripts/kb.py process
-python3 scripts/kb.py query "rhotics, gender, and identity"
-python3 scripts/kb.py lint
+SKILL="/path/to/installed/research-kb"
+python3 "$SKILL/scripts/research_kb.py" --vault /path/to/this-vault index
+python3 "$SKILL/scripts/research_kb.py" --vault /path/to/this-vault lint
 ```
 
 `index.md` is the human-facing Obsidian entry point. `.research-kb/index.json`
@@ -1325,6 +1345,27 @@ def skill_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def parse_vault_path(value: str) -> Path:
+    """Return an external vault path and reject the installed skill itself."""
+    root = Path(value).expanduser().resolve()
+    package = skill_root().resolve()
+    if root == package or package in root.parents or root in package.parents:
+        raise argparse.ArgumentTypeError(
+            "--vault must be outside the installed research-kb skill directory; choose a separate user vault"
+        )
+    return root
+
+
+def vault_relative_path(root: Path, value: str, label: str) -> Path:
+    candidate = Path(value)
+    if candidate.is_absolute():
+        raise ValueError(f"{label} must be a vault-relative path")
+    target = (root / candidate).resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"{label} must stay inside the selected vault")
+    return target
+
+
 def skill_template_dir() -> Path:
     return skill_root() / "templates"
 
@@ -1389,7 +1430,6 @@ def init_vault(root: Path, force: bool = False) -> list[str]:
         "log.md": LOG_TEXT,
         "README.md": README_TEXT,
         MACHINE_CONFIG: MACHINE_CONFIG_TEXT,
-        "plugins/zotero/README.md": "# Zotero Plugin Placeholder\n\nZotero is optional plugin data, not v1 core authority.\n",
     }.items():
         if write_if_missing(root / rel, content, force=force):
             changed.append(f"wrote {rel}")
@@ -3527,9 +3567,7 @@ def find_note_arg(root: Path, value: str) -> Note | None:
 
 
 def agent_task_path(root: Path, output_dir: str, note: Note) -> Path:
-    base = Path(output_dir)
-    if not base.is_absolute():
-        base = root / base
+    base = vault_relative_path(root, output_dir, "--output-dir")
     return base / f"{note.path.stem}.agent-task.json"
 
 
@@ -4468,9 +4506,7 @@ def curator_task(root: Path, node: Note, notes: list[Note], max_papers: int) -> 
 
 
 def curator_task_path(root: Path, output_dir: str, node: Note) -> Path:
-    base = Path(output_dir)
-    if not base.is_absolute():
-        base = root / base
+    base = vault_relative_path(root, output_dir, "--output-dir")
     return base / f"{node.path.stem}.curator-task.json"
 
 
@@ -5047,6 +5083,136 @@ def command_apply_curation(args: argparse.Namespace) -> int:
     return 1 if had_error else 0
 
 
+def is_legacy_package_vault(path: Path) -> bool:
+    return (path / "skills" / "research-kb" / "SKILL.md").is_file()
+
+
+def migration_sources(source: Path) -> list[Path]:
+    """Select user data while excluding package/developer material from old layouts."""
+    selected: list[Path] = []
+    legacy = is_legacy_package_vault(source)
+    for item in sorted(source.iterdir(), key=lambda path: path.name.lower()):
+        if item.name == ".git" or item.is_symlink():
+            continue
+        if item.is_dir() and item.name in MIGRATABLE_DIRS:
+            selected.append(item)
+        elif item.is_file() and item.name in MIGRATABLE_ROOT_FILES:
+            # A package README explains the tool, rather than the researcher's
+            # vault; let init create a correct vault README in that case.
+            if legacy and item.name in {"README.md", "AGENTS.md"}:
+                continue
+            selected.append(item)
+        elif item.is_file() and item.suffix.lower() == ".md" and not legacy:
+            selected.append(item)
+    return selected
+
+
+def migration_plan(source: Path, destination: Path) -> dict[str, Any]:
+    items = migration_sources(source)
+    return {
+        "schema_version": 1,
+        "source": str(source),
+        "destination": str(destination),
+        "legacy_package_vault": is_legacy_package_vault(source),
+        "source_unchanged": True,
+        "items_to_copy": [item.name for item in items],
+        "skipped": [".git", "symlinks", "package source and developer files"],
+    }
+
+
+def copy_migration_item(source: Path, destination: Path, skipped_symlinks: list[str]) -> None:
+    if source.is_symlink():
+        skipped_symlinks.append(str(source))
+        return
+    if source.is_file():
+        ensure_dir(destination.parent)
+        shutil.copy2(source, destination)
+        return
+    ensure_dir(destination)
+    for current, dirnames, filenames in os.walk(source):
+        current_path = Path(current)
+        relative = current_path.relative_to(source)
+        target_dir = destination / relative
+        ensure_dir(target_dir)
+        retained_dirs: list[str] = []
+        for name in dirnames:
+            candidate = current_path / name
+            if candidate.is_symlink():
+                skipped_symlinks.append(str(candidate))
+            else:
+                retained_dirs.append(name)
+        dirnames[:] = retained_dirs
+        for name in filenames:
+            candidate = current_path / name
+            if candidate.is_symlink():
+                skipped_symlinks.append(str(candidate))
+                continue
+            shutil.copy2(candidate, target_dir / name)
+
+
+def command_migrate(args: argparse.Namespace) -> int:
+    source = Path(args.source).expanduser().resolve()
+    destination = Path(args.vault).resolve()
+    if not source.is_dir():
+        raise ValueError(f"migration source is not a directory: {source}")
+    package = skill_root().resolve()
+    if source == package or package in source.parents:
+        raise ValueError("migration source must be an existing vault, not the installed skill directory")
+    if source == destination or source in destination.parents or destination in source.parents:
+        raise ValueError("migration source and destination must be separate, non-nested directories")
+    if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
+        raise ValueError("migration destination must be empty or not exist; existing vaults are never overwritten")
+
+    plan = migration_plan(source, destination)
+    if not args.apply:
+        if args.json:
+            print(json.dumps(plan, indent=2, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Migration plan (no files changed):")
+            print(f"- Copy from: {source}")
+            print(f"- New vault: {destination}")
+            print(f"- Copy: {', '.join(plan['items_to_copy']) or 'no recognized vault content'}")
+            print("- The original folder remains unchanged as the fallback copy.")
+            print("Run again with --apply to create the new vault.")
+        return 0
+
+    ensure_dir(destination.parent)
+    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.migration-", dir=destination.parent))
+    try:
+        skipped_symlinks: list[str] = []
+        preserved_legacy_scaffold: list[str] = []
+        legacy = is_legacy_package_vault(source)
+        for item in migration_sources(source):
+            target = staging / item.name
+            if legacy and item.name in {"AGENTS.md", "index.md", "log.md"}:
+                target = staging / "archive" / "migration" / f"legacy-{item.name}"
+                preserved_legacy_scaffold.append(item.name)
+            copy_migration_item(item, target, skipped_symlinks)
+        initialized = init_vault(staging)
+        update_index(staging)
+        report = {
+            **plan,
+            "applied_at": utc_timestamp(),
+            "initialized": initialized,
+            "skipped_symlinks": skipped_symlinks,
+            "preserved_legacy_scaffold": preserved_legacy_scaffold,
+        }
+        report_path = staging / MACHINE_DIR / "reports" / "migration-report.json"
+        ensure_dir(report_path.parent)
+        report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+        append_log(staging, f"Migrated vault content from `{source}` without changing the source folder.")
+        if destination.exists():
+            destination.rmdir()
+        os.replace(staging, destination)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    print(f"Migrated {len(plan['items_to_copy'])} vault item(s) to {destination}.")
+    print("The source folder was not changed.")
+    print(f"Wrote {rel_to(report_path, destination)}")
+    return 0
+
+
 def command_init(args: argparse.Namespace) -> int:
     root = Path(args.vault).resolve()
     changed = init_vault(root, force=args.force)
@@ -5280,7 +5446,9 @@ def query_vault(root: Path, query: str, mode: str, limit: int) -> str:
 
 
 def save_query_note(root: Path, output: str, query: str, save_path: str) -> str:
-    target = root / save_path
+    target = vault_relative_path(root, save_path, "--save")
+    if target == root:
+        raise ValueError("--save must name a file inside the selected vault")
     if target.suffix != ".md":
         target = target.with_suffix(".md")
     ensure_dir(target.parent)
@@ -5936,12 +6104,23 @@ def command_new_node(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Operate a local Obsidian research knowledge base.")
-    parser.add_argument("--vault", default=".", help="User-selected Obsidian vault root for KB content. Defaults to the current directory.")
+    parser.add_argument(
+        "--vault",
+        required=True,
+        type=parse_vault_path,
+        help="User-selected Obsidian vault root for KB content. Must be outside the installed skill.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     init_parser = sub.add_parser("init", help="Create the vault scaffold and templates.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite scaffold files and templates.")
     init_parser.set_defaults(func=command_init)
+
+    migrate_parser = sub.add_parser("migrate", help="Copy a legacy vault into a new external vault without changing the source.")
+    migrate_parser.add_argument("--source", required=True, help="Existing vault or legacy repo-as-vault to copy from.")
+    migrate_parser.add_argument("--apply", action="store_true", help="Create the new vault. Without this flag, print a no-change plan.")
+    migrate_parser.add_argument("--json", action="store_true", help="Print the no-change migration plan as JSON.")
+    migrate_parser.set_defaults(func=command_migrate)
 
     index_parser = sub.add_parser("index", help="Refresh the human index and machine index cache.")
     index_parser.set_defaults(func=command_index)
@@ -5960,7 +6139,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_context_parser = sub.add_parser("agent-context", help="Export model-agnostic paper-analysis task JSON for an external agent or subagent.")
     agent_context_parser.add_argument("--note", help="Paper note path, stem, or wikilink. Defaults to draft paper notes.")
-    agent_context_parser.add_argument("--output-dir", default=f"{MACHINE_DIR}/agent-tasks", help="Vault-relative or absolute directory for task JSON files.")
+    agent_context_parser.add_argument("--output-dir", default=f"{MACHINE_DIR}/agent-tasks", help="Vault-relative directory for task JSON files.")
     agent_context_parser.add_argument("--max-chars", type=int, default=DEFAULT_AGENT_MAX_CHARS, help="Maximum extracted PDF text characters to include. Use 0 for the full retained extracted text.")
     agent_context_parser.add_argument("--limit", type=int, default=0, help="Maximum number of paper tasks to export.")
     agent_context_parser.add_argument("--all", action="store_true", help="Export all paper notes, including notes whose sections are already filled.")
@@ -5997,7 +6176,7 @@ def build_parser() -> argparse.ArgumentParser:
     curator_context_parser = sub.add_parser("curator-context", help="Export node curator task JSON for affected non-paper nodes.")
     curator_context_parser.add_argument("--nodes", nargs="*", help="Specific node paths, stems, or wikilinks. Defaults to all nodes with inbound quality-passed papers.")
     curator_context_parser.add_argument("--mode", choices=["initial-build", "incremental-build"], default="incremental-build")
-    curator_context_parser.add_argument("--output-dir", default=CURATOR_TASK_DIR, help="Vault-relative or absolute directory for curator task JSON files.")
+    curator_context_parser.add_argument("--output-dir", default=CURATOR_TASK_DIR, help="Vault-relative directory for curator task JSON files.")
     curator_context_parser.add_argument("--max-papers", type=int, default=20, help="Maximum inbound paper evidence packets per curator task.")
     curator_context_parser.add_argument("--limit", type=int, default=0, help="Maximum number of curator tasks to export.")
     curator_context_parser.set_defaults(func=command_curator_context)
@@ -6083,7 +6262,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+        return 2
 
 
 if __name__ == "__main__":

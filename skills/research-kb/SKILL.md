@@ -1,6 +1,6 @@
 ---
 name: research-kb
-description: Build, operate, query, review, and repair a local Obsidian-first research knowledge base from researcher-supplied PDFs. Use when Codex is asked to process raw research PDFs, create source-grounded paper notes, maintain typed Markdown graph links, answer questions from a curated vault, suggest citations from existing notes, lint or fix a knowledge base, bootstrap a new research KB vault, or install a reusable Codex skill for scholarly Markdown knowledge-base workflows.
+description: Build, migrate, operate, query, review, and repair a local Obsidian-first research knowledge base from researcher-supplied PDFs. Use when Codex is asked to install this skill from a repository URL, create or migrate a research KB, process raw research PDFs, create source-grounded paper notes, maintain typed Markdown graph links, answer questions from a curated vault, suggest citations from existing notes, or lint or fix a knowledge base.
 ---
 
 # Research KB
@@ -15,14 +15,20 @@ Keep the installed skill directory separate from the user's knowledge base. The 
 
 Find or choose the vault root first. If the user has not supplied a path, ask for the desired Obsidian vault location before bootstrapping. A vault root usually contains `AGENTS.md`, `index.md`, `log.md`, `raw/papers/`, and folders such as `papers/`, `concepts/`, `variables/`, `methods/`, `communities/`, `questions/`, and `syntheses/`.
 
+Never use the installed skill directory as a vault. The CLI requires an explicit
+`--vault` path and rejects the skill directory. Do not ask a non-technical
+researcher to run commands, edit a config file, or select workflow subcommands.
+
 Use the bundled CLI for the vault lifecycle. The CLI is model-agnostic: it never calls an LLM provider, never requires a provider API key, and treats model reasoning as an agent/subagent contract.
 
 For a non-technical researcher, the normal request is simply: **"Build my research knowledge base from the PDFs in `raw/papers/`. Continue until the build is complete, then give me the researcher check."** Read `references/researcher-guide.md` before presenting this workflow or its final report. The researcher should only need to prepare the PDFs and inspect the final spot-check sample and exceptions; do not ask them to export jobs, copy JSON files, or decide which command comes next.
 
 When Codex subagents are available, process PDFs with the bundled paper process agent by default. For quota-constrained harnesses, prefer the resumable `build-jobs` workflow: export a small batch, spawn `research-kb.paper-process` workers for that batch, apply returned results, run quality guard automatically, then resume later from the vault-local job ledger. `agent-context` and `build-jobs export-paper` include the full retained extracted text by default. Use `--max-chars <N>` only when a smaller/local harness needs an explicit task-size cap; `--max-chars 0` means no task-level cap.
 
+For a new vault:
+
 ```bash
-VAULT="/path/to/user-selected-vault"
+VAULT="/path/to/new-user-vault"
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" init
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" index
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" process
@@ -40,6 +46,19 @@ python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" lint
 python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" lint --fix
 ```
 
+For an existing vault or legacy repo-as-vault, migrate before running any other
+vault command:
+
+```bash
+OLD_VAULT="/path/to/old-vault"
+VAULT="/path/to/new-user-vault"
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" migrate --source "$OLD_VAULT"
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" migrate --source "$OLD_VAULT" --apply
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" lint
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" index
+python3 <skill-dir>/scripts/research_kb.py --vault "$VAULT" build-report
+```
+
 For real PDFs, prefer a Python environment with `pymupdf4llm` and `pypdf` installed. `pymupdf4llm` is the preferred extraction backend because it produces LLM-ready Markdown; `pypdf` remains a compatibility fallback. If optional PDF libraries are unavailable, the CLI still creates conservative hash-tracked drafts and marks uncertain extraction fields for review.
 
 Quota-resilient agent-assisted paper understanding:
@@ -55,6 +74,24 @@ Quota-resilient agent-assisted paper understanding:
 9. Run `build-jobs export-curator --batch-size 10` to `20`, spawn `research-kb.node-curator` workers for exported tasks, and run `build-jobs apply-curator` to enrich non-paper nodes, create strong active synthesis notes, and apply high-confidence merge/archive plans.
 
 Use `enrich --create-nodes` only as deterministic offline fallback when no agent/subagent reasoning is available.
+
+## Install and Migration Requests
+
+When a researcher pastes this repository URL and asks to install, create, or
+migrate a KB, handle the setup yourself. Use the harness's skill/plugin
+installer when available; otherwise install only this `skills/research-kb/`
+folder from the repository into the harness's skill location. Never install
+into the user's vault.
+
+For a new KB, choose the user-selected external vault path, run `init`, and
+then proceed with the researcher-facing build workflow. Ask at most one short
+location question when the desired vault cannot be inferred safely.
+
+For an existing KB or legacy repo-as-vault, read
+`references/migration.md`, run `migrate --source <old-vault>` first to inspect
+the no-change plan, then run it with `--apply` because the researcher has
+already asked to migrate. Finish with `lint`, `index`, and `build-report`.
+Report the new location, concise outcome, and that the original was preserved.
 
 ## Harness Subagent Guidance
 
@@ -86,29 +123,6 @@ When the user asks to build or update a KB, the harness owns the queue. Do not s
 6. Run `lint`, `index`, and `build-report`. Report `ready_for_researcher_spot_check` only when both job ledgers are complete, lint has no errors, and no unresolved exception remains.
 
 If the harness cannot delegate workers, explain that paper understanding is not yet running and ask for permission or a configured model runner; deterministic node creation is not an acceptable substitute for populated paper or graph notes.
-
-When this repository is the vault, the wrapper is:
-
-```bash
-python3 scripts/kb.py init
-python3 scripts/kb.py index
-python3 scripts/kb.py process
-python3 scripts/kb.py build-jobs refresh
-python3 scripts/kb.py build-jobs export-paper --batch-size 10
-python3 scripts/kb.py build-jobs apply-paper
-python3 scripts/kb.py reconcile-metadata --apply
-python3 scripts/kb.py build-jobs export-curator --batch-size 20
-python3 scripts/kb.py build-jobs apply-curator
-python3 scripts/kb.py build-report
-python3 scripts/kb.py query "your question"
-python3 scripts/kb.py lint
-```
-
-For development or demos, the wrapper can also target a separate vault:
-
-```bash
-python3 scripts/kb.py --vault /path/to/user-selected-vault init
-```
 
 ## Workflow Choice
 
@@ -148,6 +162,8 @@ Read `references/vault-schema.md` when you need the folder layout, frontmatter, 
 Read `references/workflows.md` when you need the step-by-step intake, query, citation-support, synthesis, review, or lint/fix workflow.
 
 Read `references/researcher-guide.md` when the user is a non-technical researcher, requests an end-to-end build, or needs to understand what to inspect after a build.
+
+Read `references/migration.md` when installing from a repository URL or migrating an existing vault.
 
 Read `references/paper-process-agent.md` when processing PDFs with Codex subagents or when you need the canonical paper understanding/summarization behavior.
 

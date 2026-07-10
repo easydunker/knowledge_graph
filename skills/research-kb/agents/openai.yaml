@@ -1,4 +1,4 @@
 interface:
   display_name: "Research KB"
   short_description: "Build and maintain an Obsidian research KB"
-  default_prompt: "Use $research-kb with my selected vault path to process raw research PDFs, query the vault, and lint or fix the knowledge base."
+  default_prompt: "Use $research-kb to create or safely migrate my selected research vault, then process PDFs and review the knowledge base."

@@ -1,26 +1,10 @@
-# Keep source PDFs local by default.
-raw/papers/*.pdf
-raw/processed/*.pdf
-raw/failed/*.pdf
-archive/merged/
-archive/invalid/
-
-# Generated KB state and caches.
-.research-kb/index.json
-.research-kb/search/
-.research-kb/agent-tasks/
-.research-kb/agent-results/
-.research-kb/curator-tasks/
-.research-kb/curator-results/
-.research-kb/quality-reports/
-.research-kb/metadata-cache/
-.research-kb/reconciliation/
-.research-kb/reports/
-.research-kb/tmp/
-.research-kb/cache/
-
-# Common local/editor noise.
-.DS_Store
-.obsidian/workspace*.json
+# Package development artifacts only. User-vault content is never created here.
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.coverage
+.venv/
+dist/
+build/
+*.egg-info/
+.DS_Store

@@ -20,7 +20,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-KB = ROOT / "scripts" / "kb.py"
+KB = ROOT / "skills" / "research-kb" / "scripts" / "research_kb.py"
 PUBLIC_PDFS = [
     "https://aclanthology.org/N19-3013.pdf",
     "https://aclanthology.org/N15-3015.pdf",
