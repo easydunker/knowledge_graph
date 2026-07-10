@@ -4019,19 +4019,28 @@ def applied_result_matches(note: Note, result_path: Path) -> bool:
 
 
 def infer_paper_job_status(root: Path, note: Note, job: dict[str, Any], previous: dict[str, Any] | None) -> str:
+    task_path = root / as_string(job.get("task_path"))
+    result_path = root / as_string(job.get("result_path"))
+    previous_status = as_string(previous.get("status")) if previous else ""
     quality_state = paper_quality_state(note)
     if quality_state == "passed":
         return PAPER_JOB_COMPLETE
+    if quality_state == "failed" and previous_status == "retry_pending":
+        return "retry_pending"
+    if quality_state == "failed" and previous_status in {"exported", "running"}:
+        if result_path.exists():
+            return "result_written"
+        if task_path.exists():
+            return previous_status
+    if quality_state == "failed" and previous_status == "result_written" and result_path.exists():
+        return "result_written"
     if quality_state == "failed":
         return "quality_failed"
-    task_path = root / as_string(job.get("task_path"))
-    result_path = root / as_string(job.get("result_path"))
     if applied_result_matches(note, result_path):
         return "applied"
     if result_path.exists():
         return "result_written"
     if task_path.exists():
-        previous_status = as_string(previous.get("status")) if previous else ""
         return previous_status if previous_status == "running" else "exported"
     return "pending"
 
@@ -4660,6 +4669,21 @@ def command_build_jobs_retry_failed(args: argparse.Namespace) -> int:
                 break
             attempts, max_attempts = job_attempt_limit(job)
             if attempts >= max_attempts and not args.force:
+                continue
+            if kind == "paper":
+                for artifact_key in ("task_path", "result_path"):
+                    artifact_path = root / as_string(job.get(artifact_key))
+                    try:
+                        if artifact_path.exists():
+                            artifact_path.unlink()
+                    except OSError as exc:
+                        set_job_status(job, "failed", f"cannot clear stale retry artifact `{artifact_path}`: {exc}")
+                        break
+                else:
+                    set_job_status(job, "retry_pending")
+                    changed += 1
+                    print(f"retry_pending {kind} {job.get('note_path') or job.get('node_path')}")
+                    continue
                 continue
             set_job_status(job, "retry_pending")
             changed += 1

@@ -20,3 +20,4 @@ Record important ingest, review, synthesis, and cleanup actions here.
 - Made curation accept only quality-passed paper notes as evidence, added one automatic retry allowance to new paper jobs, and made build status recommend retrying failed jobs.
 - Updated build reports with an explicit workflow state, concise exception output, and a deterministic sample of quality-passed notes for researcher audit.
 - Refined job failure reporting so retryable failures stay in the automated queue, while exhausted paper and curator jobs become deduplicated researcher-review exceptions with status and error details.
+- Repaired the paper retry state machine so a quality-failed paper can receive a fresh task and result after retry, without retaining stale task or result artifacts.
