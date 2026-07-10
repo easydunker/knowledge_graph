@@ -5847,6 +5847,8 @@ def command_build_report(args: argparse.Namespace) -> int:
         for item in report["retryable_failures"][:10]:
             location = item["path"] or item["job_id"]
             print(f"- {item['kind']} {location}: {item['status']} ({item['attempts']}/{item['max_attempts']}); {item['last_error'] or 'no error detail recorded'}")
+        if len(report["retryable_failures"]) > 10:
+            print(f"- … and {len(report['retryable_failures']) - 10} more (see --json for the complete list).")
     if report["needs_user_review"]:
         print(f"\n## Exceptions To Review ({len(report['needs_user_review'])})\n")
         for item in report["needs_user_review"][:10]:
