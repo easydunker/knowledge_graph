@@ -17,6 +17,8 @@ Find or choose the vault root first. If the user has not supplied a path, ask fo
 
 Use the bundled CLI for the vault lifecycle. The CLI is model-agnostic: it never calls an LLM provider, never requires a provider API key, and treats model reasoning as an agent/subagent contract.
 
+For a non-technical researcher, the normal request is simply: **"Build my research knowledge base from the PDFs in `raw/papers/`. Continue until the build is complete, then give me the researcher check."** Read `references/researcher-guide.md` before presenting this workflow or its final report. The researcher should only need to prepare the PDFs and inspect the final spot-check sample and exceptions; do not ask them to export jobs, copy JSON files, or decide which command comes next.
+
 When Codex subagents are available, process PDFs with the bundled paper process agent by default. For quota-constrained harnesses, prefer the resumable `build-jobs` workflow: export a small batch, spawn `research-kb.paper-process` workers for that batch, apply returned results, run quality guard automatically, then resume later from the vault-local job ledger. `agent-context` and `build-jobs export-paper` include the full retained extracted text by default. Use `--max-chars <N>` only when a smaller/local harness needs an explicit task-size cap; `--max-chars 0` means no task-level cap.
 
 ```bash
@@ -71,6 +73,19 @@ When the user explicitly authorizes subagents or delegated agent work, the harne
 9. Run `lint`, `index`, and `build-report`.
 
 For quota-constrained Codex runs, replace steps 1-8 with the job-aware commands: `build-jobs refresh`, `build-jobs export-paper --batch-size N`, `build-jobs apply-paper`, `reconcile-metadata --apply`, `build-jobs export-curator --batch-size N`, and `build-jobs apply-curator`. Keep each worker scoped to one task JSON and require it to write only the task's `result_path`. For large vaults, batch workers by retrieval shard or note type so the root harness never needs to load the whole graph or all paper summaries at once.
+
+### Completion Contract For A Full Build
+
+When the user asks to build or update a KB, the harness owns the queue. Do not stop after `process`, `enrich`, applying a single batch, or creating candidate nodes. For a batch of roughly 60 papers, use bounded paper batches (normally 5 to 10) and repeat this cycle until the paper ledger has no work-in-progress jobs (`pending`, `exported`, `running`, `result_written`, or `applied`). A failed or quality-failed job is an explicit exception, never successful completion:
+
+1. `process`, then `build-jobs refresh` and `build-jobs status`.
+2. Export the next paper batch, delegate every exported task, and apply its returned results.
+3. If a result fails validation or quality, retry that specific paper once with the failure report in its worker instructions. Keep any paper that still fails in the exception list; never silently treat it as complete or use it for curation.
+4. Reconcile metadata after the paper queue is terminal.
+5. Export, delegate, and apply curator batches until the curator ledger has no unfinished or failed jobs. Curators must receive only quality-passed paper evidence.
+6. Run `lint`, `index`, and `build-report`. Report `ready_for_researcher_spot_check` only when both job ledgers are complete, lint has no errors, and no unresolved exception remains.
+
+If the harness cannot delegate workers, explain that paper understanding is not yet running and ask for permission or a configured model runner; deterministic node creation is not an acceptable substitute for populated paper or graph notes.
 
 When this repository is the vault, the wrapper is:
 
@@ -131,6 +146,8 @@ Paper notes should include:
 Read `references/vault-schema.md` when you need the folder layout, frontmatter, node types, or relation labels.
 
 Read `references/workflows.md` when you need the step-by-step intake, query, citation-support, synthesis, review, or lint/fix workflow.
+
+Read `references/researcher-guide.md` when the user is a non-technical researcher, requests an end-to-end build, or needs to understand what to inspect after a build.
 
 Read `references/paper-process-agent.md` when processing PDFs with Codex subagents or when you need the canonical paper understanding/summarization behavior.
 

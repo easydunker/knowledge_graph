@@ -13,3 +13,9 @@ Record important ingest, review, synthesis, and cleanup actions here.
 - Clarified and tested the tool-vs-vault separation: the installed skill is reusable tooling, while each user's KB content lives in a user-selected Obsidian vault passed with `--vault`.
 - Ran the full public-PDF sample workflow in a temporary vault, reviewed note/query quality, and improved extraction cleanup, page-aware evidence anchors, fallback abstract selection, identity-edge precision, query scoring, and evaluation timing/quality checks.
 - Replaced the built-in provider-specific LLM path with a model-agnostic agent contract: `agent-context` exports portable paper-analysis tasks, `apply-analysis` imports returned JSON, and deterministic `process`/`enrich` remain provider-free.
+
+## 2026-07-10
+
+- Added an end-to-end, researcher-facing build contract so a harness must finish paper processing and node curation before calling a KB build complete; documented the small final spot-check and exception workflow for non-technical researchers.
+- Made curation accept only quality-passed paper notes as evidence, added one automatic retry allowance to new paper jobs, and made build status recommend retrying failed jobs.
+- Updated build reports with an explicit workflow state, concise exception output, and a deterministic sample of quality-passed notes for researcher audit.

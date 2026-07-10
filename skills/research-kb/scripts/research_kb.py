@@ -4062,7 +4062,7 @@ def build_paper_job(root: Path, note: Note, previous: dict[str, Any] | None = No
         "prompt_version": PAPER_PROCESS_PROMPT_VERSION,
         "status": status,
         "attempts": attempts,
-        "max_attempts": int(previous.get("max_attempts", 1)) if previous and isinstance(previous.get("max_attempts"), int) else 1,
+        "max_attempts": int(previous.get("max_attempts", 2)) if previous and isinstance(previous.get("max_attempts"), int) else 2,
         "task_path": "",
         "result_path": "",
         "quality_report_path": quality_report_path_for_note(note),
@@ -4132,6 +4132,8 @@ def summarize_jobs(jobs: dict[str, dict[str, Any]]) -> dict[str, int]:
 
 
 def next_job_command(paper_summary: dict[str, int], curator_summary: dict[str, int]) -> str:
+    if paper_summary.get("failed") or paper_summary.get("quality_failed") or curator_summary.get("failed"):
+        return "build-jobs retry-failed"
     if paper_summary.get("result_written") or paper_summary.get("applied"):
         return "build-jobs apply-paper"
     if paper_summary.get("pending") or paper_summary.get("retry_pending"):
@@ -4276,7 +4278,10 @@ def paper_quality_state(note: Note) -> str:
 
 
 def curator_eligible_paper(note: Note) -> bool:
-    return note.note_type == "paper" and paper_quality_state(note) != "failed"
+    # Curation turns paper-note content into shared graph knowledge.  Only
+    # quality-passed notes are reliable enough for that promotion; draft,
+    # pending, and failed notes must stay out of curator evidence packets.
+    return note.note_type == "paper" and paper_quality_state(note) == "passed"
 
 
 def edge_targets_node(edge: Edge, node: Note, notes: list[Note]) -> bool:
@@ -5684,6 +5689,30 @@ def build_report(root: Path) -> dict[str, Any]:
     metadata = reconciliation_summary(root)
     paper_jobs = summarize_jobs(load_job_ledger(root, "paper"))
     curator_jobs = summarize_jobs(load_job_ledger(root, "curator"))
+    attention_notes = [
+        note.rel_path
+        for note in papers
+        if str(note.frontmatter.get("review_state", "")) in {"needs_review", "agent_draft", "quality_failed"}
+    ]
+    passed_for_audit = [note for note in papers if paper_quality_state(note) == "passed"]
+    audit_sample = sorted(
+        passed_for_audit,
+        key=lambda note: hashlib.sha256(
+            str(note.frontmatter.get("pdf_sha256", "") or note.rel_path).encode("utf-8")
+        ).hexdigest(),
+    )[: min(8, len(passed_for_audit))]
+    paper_job_blockers = sum(
+        value for status, value in paper_jobs.items() if status not in {PAPER_JOB_COMPLETE}
+    )
+    curator_job_blockers = sum(
+        value for status, value in curator_jobs.items() if status != CURATOR_JOB_COMPLETE
+    )
+    if paper_job_blockers or curator_job_blockers or any(item.severity == "error" for item in issues):
+        workflow_state = "build_incomplete"
+    elif attention_notes:
+        workflow_state = "researcher_attention_needed"
+    else:
+        workflow_state = "ready_for_researcher_spot_check"
     return {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
@@ -5703,13 +5732,12 @@ def build_report(root: Path) -> dict[str, Any]:
         "paper_jobs": paper_jobs,
         "curator_jobs": curator_jobs,
         "next_job_command": next_job_command(paper_jobs, curator_jobs),
+        "workflow_state": workflow_state,
+        "researcher_spot_check": [note.rel_path for note in audit_sample],
+        "researcher_spot_check_guidance": "Read this small, deterministic sample of quality-passed notes and inspect the cited anchors in their PDFs; use the exception list for anything else.",
         "lint_errors": sum(1 for item in issues if item.severity == "error"),
         "lint_warnings": sum(1 for item in issues if item.severity == "warn"),
-        "needs_user_review": [
-            note.rel_path
-            for note in papers
-            if str(note.frontmatter.get("review_state", "")) in {"needs_review", "agent_draft", "quality_failed"}
-        ],
+        "needs_user_review": attention_notes,
     }
 
 
@@ -5733,16 +5761,26 @@ def command_build_report(args: argparse.Namespace) -> int:
     print(f"- Invalid/stale candidates: {metadata.get('invalid_candidates', 0)}")
     print(f"- Paper jobs: {report['paper_jobs']}")
     print(f"- Curator jobs: {report['curator_jobs']}")
+    print(f"- Workflow state: {report['workflow_state']}")
     print(f"- Next job command: {report['next_job_command']}")
     print(f"- Lint errors: {report['lint_errors']}")
     print(f"- Lint warnings: {report['lint_warnings']}")
     if report["quality_failed_notes"]:
-        print("\n## Quality Failed\n")
-        for path in report["quality_failed_notes"]:
+        print(f"\n## Quality Failed ({len(report['quality_failed_notes'])})\n")
+        for path in report["quality_failed_notes"][:10]:
             print(f"- {path}")
+        if len(report["quality_failed_notes"]) > 10:
+            print(f"- … and {len(report['quality_failed_notes']) - 10} more (see --json for the complete list).")
     if report["needs_user_review"]:
-        print("\n## Needs User Review\n")
-        for path in report["needs_user_review"]:
+        print(f"\n## Exceptions To Review ({len(report['needs_user_review'])})\n")
+        for path in report["needs_user_review"][:10]:
+            print(f"- {path}")
+        if len(report["needs_user_review"]) > 10:
+            print(f"- … and {len(report['needs_user_review']) - 10} more (see --json for the complete list).")
+    if report["researcher_spot_check"]:
+        print("\n## Researcher Spot Check\n")
+        print("Read this small sample of quality-passed notes and verify their evidence anchors in the PDFs. You do not need to read every note unless it appears in the exceptions list.")
+        for path in report["researcher_spot_check"]:
             print(f"- {path}")
     return 0
 

@@ -13,6 +13,12 @@
 
 `init` copies canonical templates from `<skill-dir>/templates/` into `/path/to/user-selected-vault/templates/`. Existing vault templates are treated as researcher customization and are not overwritten unless `init --force` is used. Note generation resolves templates in this order: vault template, installed skill template, embedded fallback.
 
+## Researcher-Facing Full Build
+
+For a non-technical researcher, read `researcher-guide.md` and accept a single request to build the KB from `raw/papers/`. The harness, not the researcher, must operate the resumable queue. A build is only complete after all paper-process jobs have passed quality or are explicitly listed as exceptions, all eligible node-curator jobs have been applied, and `lint`, `index`, and `build-report` have run.
+
+Never describe candidate node creation as a completed KB. Nodes are intentionally sparse until their linked paper notes pass quality and a node-curator task enriches them.
+
 ## Intake and Processing
 
 1. Confirm the PDFs are already in `raw/papers/`.

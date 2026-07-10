@@ -97,6 +97,10 @@ The quota-resilient queue is the default for Codex-like harnesses. It records st
 
 This lets later runs resume without the root harness remembering which PDFs were already processed.
 
+## Researcher Experience
+
+The researcher should only put PDFs in `raw/papers/` and ask the harness to build the KB. The harness must continue paper-processing and node-curation batches until the ledger is terminal; creating draft paper notes or graph nodes is not completion. The final `build-report` supplies a small deterministic spot-check sample and a bounded exception list, so a researcher can validate the build without reading every note. See [the researcher guide](skills/research-kb/references/researcher-guide.md).
+
 ## Agent Contracts
 
 The skill includes bundled agent contracts and references:
