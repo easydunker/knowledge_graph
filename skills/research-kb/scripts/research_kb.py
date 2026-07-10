@@ -4019,19 +4019,28 @@ def applied_result_matches(note: Note, result_path: Path) -> bool:
 
 
 def infer_paper_job_status(root: Path, note: Note, job: dict[str, Any], previous: dict[str, Any] | None) -> str:
+    task_path = root / as_string(job.get("task_path"))
+    result_path = root / as_string(job.get("result_path"))
+    previous_status = as_string(previous.get("status")) if previous else ""
     quality_state = paper_quality_state(note)
     if quality_state == "passed":
         return PAPER_JOB_COMPLETE
+    if quality_state == "failed" and previous_status == "retry_pending":
+        return "retry_pending"
+    if quality_state == "failed" and previous_status in {"exported", "running"}:
+        if result_path.exists():
+            return "result_written"
+        if task_path.exists():
+            return previous_status
+    if quality_state == "failed" and previous_status == "result_written" and result_path.exists():
+        return "result_written"
     if quality_state == "failed":
         return "quality_failed"
-    task_path = root / as_string(job.get("task_path"))
-    result_path = root / as_string(job.get("result_path"))
     if applied_result_matches(note, result_path):
         return "applied"
     if result_path.exists():
         return "result_written"
     if task_path.exists():
-        previous_status = as_string(previous.get("status")) if previous else ""
         return previous_status if previous_status == "running" else "exported"
     return "pending"
 
@@ -4062,7 +4071,7 @@ def build_paper_job(root: Path, note: Note, previous: dict[str, Any] | None = No
         "prompt_version": PAPER_PROCESS_PROMPT_VERSION,
         "status": status,
         "attempts": attempts,
-        "max_attempts": int(previous.get("max_attempts", 1)) if previous and isinstance(previous.get("max_attempts"), int) else 1,
+        "max_attempts": int(previous.get("max_attempts", 2)) if previous and isinstance(previous.get("max_attempts"), int) else 2,
         "task_path": "",
         "result_path": "",
         "quality_report_path": quality_report_path_for_note(note),
@@ -4131,9 +4140,48 @@ def summarize_jobs(jobs: dict[str, dict[str, Any]]) -> dict[str, int]:
     return {key: value for key, value in summary.items() if value}
 
 
-def next_job_command(paper_summary: dict[str, int], curator_summary: dict[str, int]) -> str:
+WORK_IN_PROGRESS_JOB_STATUSES = {"pending", "retry_pending", "exported", "running", "result_written", "applied"}
+FAILURE_JOB_STATUSES = {"failed", "quality_failed"}
+
+
+def job_attempt_limit(job: dict[str, Any]) -> tuple[int, int]:
+    attempts = int(job.get("attempts", 0)) if isinstance(job.get("attempts"), int) else 0
+    max_attempts = int(job.get("max_attempts", 1)) if isinstance(job.get("max_attempts"), int) else 1
+    return attempts, max_attempts
+
+
+def job_failure_records(kind: str, jobs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for job in jobs.values():
+        status = as_string(job.get("status"))
+        if status not in FAILURE_JOB_STATUSES:
+            continue
+        attempts, max_attempts = job_attempt_limit(job)
+        path = as_string(job.get("note_path") or job.get("node_path"))
+        job_id = as_string(job.get("job_id"))
+        records.append(
+            {
+                "kind": kind,
+                "path": path,
+                "job_id": job_id,
+                "status": status,
+                "attempts": attempts,
+                "max_attempts": max_attempts,
+                "retryable": attempts < max_attempts,
+                "last_error": as_string(job.get("last_error")),
+            }
+        )
+    return sorted(records, key=lambda item: (str(item["kind"]), str(item["path"]), str(item["job_id"])))
+
+
+def next_job_command(paper_jobs: dict[str, dict[str, Any]], curator_jobs: dict[str, dict[str, Any]]) -> str:
+    paper_summary = summarize_jobs(paper_jobs)
+    curator_summary = summarize_jobs(curator_jobs)
+    failures = job_failure_records("paper", paper_jobs) + job_failure_records("curator", curator_jobs)
     if paper_summary.get("result_written") or paper_summary.get("applied"):
         return "build-jobs apply-paper"
+    if any(record["retryable"] for record in failures):
+        return "build-jobs retry-failed"
     if paper_summary.get("pending") or paper_summary.get("retry_pending"):
         return "build-jobs export-paper --batch-size 10"
     if paper_summary.get("exported") or paper_summary.get("running"):
@@ -4144,6 +4192,8 @@ def next_job_command(paper_summary: dict[str, int], curator_summary: dict[str, i
         return "build-jobs export-curator --batch-size 20"
     if curator_summary.get("exported") or curator_summary.get("running"):
         return "wait for curator results, then run build-jobs apply-curator"
+    if failures:
+        return "review terminal exceptions in build-report"
     return "lint && index && build-report"
 
 
@@ -4153,12 +4203,15 @@ def command_build_jobs_status(args: argparse.Namespace) -> int:
     curator_jobs = refresh_curator_jobs(root, max_papers=args.max_papers)
     paper_summary = summarize_jobs(paper_jobs)
     curator_summary = summarize_jobs(curator_jobs)
-    next_command = next_job_command(paper_summary, curator_summary)
+    failures = job_failure_records("paper", paper_jobs) + job_failure_records("curator", curator_jobs)
+    next_command = next_job_command(paper_jobs, curator_jobs)
     status = {
         "schema_version": 1,
         "generated_at": now_job_timestamp(),
         "paper_jobs": paper_summary,
         "curator_jobs": curator_summary,
+        "retryable_failures": [record for record in failures if record["retryable"]],
+        "terminal_exceptions": [record for record in failures if not record["retryable"]],
         "next_suggested_command": next_command,
     }
     target = root / JOBS_STATUS_FILE
@@ -4276,7 +4329,10 @@ def paper_quality_state(note: Note) -> str:
 
 
 def curator_eligible_paper(note: Note) -> bool:
-    return note.note_type == "paper" and paper_quality_state(note) != "failed"
+    # Curation turns paper-note content into shared graph knowledge.  Only
+    # quality-passed notes are reliable enough for that promotion; draft,
+    # pending, and failed notes must stay out of curator evidence packets.
+    return note.note_type == "paper" and paper_quality_state(note) == "passed"
 
 
 def edge_targets_node(edge: Edge, node: Note, notes: list[Note]) -> bool:
@@ -4611,9 +4667,23 @@ def command_build_jobs_retry_failed(args: argparse.Namespace) -> int:
         for job in candidates:
             if args.limit and changed >= args.limit:
                 break
-            attempts = int(job.get("attempts", 0)) if isinstance(job.get("attempts"), int) else 0
-            max_attempts = int(job.get("max_attempts", 1)) if isinstance(job.get("max_attempts"), int) else 1
+            attempts, max_attempts = job_attempt_limit(job)
             if attempts >= max_attempts and not args.force:
+                continue
+            if kind == "paper":
+                for artifact_key in ("task_path", "result_path"):
+                    artifact_path = root / as_string(job.get(artifact_key))
+                    try:
+                        if artifact_path.exists():
+                            artifact_path.unlink()
+                    except OSError as exc:
+                        set_job_status(job, "failed", f"cannot clear stale retry artifact `{artifact_path}`: {exc}")
+                        break
+                else:
+                    set_job_status(job, "retry_pending")
+                    changed += 1
+                    print(f"retry_pending {kind} {job.get('note_path') or job.get('node_path')}")
+                    continue
                 continue
             set_job_status(job, "retry_pending")
             changed += 1
@@ -5682,8 +5752,66 @@ def build_report(root: Path) -> dict[str, Any]:
     archived_invalid = sorted(rel_to(path, root) for path in (root / ARCHIVE_INVALID_DIR).rglob("*.md")) if (root / ARCHIVE_INVALID_DIR).exists() else []
     issues = lint_vault(root)
     metadata = reconciliation_summary(root)
-    paper_jobs = summarize_jobs(load_job_ledger(root, "paper"))
-    curator_jobs = summarize_jobs(load_job_ledger(root, "curator"))
+    paper_job_ledger = load_job_ledger(root, "paper")
+    curator_job_ledger = load_job_ledger(root, "curator")
+    paper_jobs = summarize_jobs(paper_job_ledger)
+    curator_jobs = summarize_jobs(curator_job_ledger)
+    job_failures = job_failure_records("paper", paper_job_ledger) + job_failure_records("curator", curator_job_ledger)
+    exceptions_by_identity: dict[str, dict[str, Any]] = {}
+
+    def add_exception(kind: str, path: str, status: str, detail: str = "", job_id: str = "", retryable: bool | None = None) -> None:
+        identity = f"{kind}:{path or job_id}"
+        entry = exceptions_by_identity.setdefault(
+            identity,
+            {"identity": identity, "kind": kind, "path": path, "job_ids": [], "statuses": [], "details": [], "retryable": False},
+        )
+        if job_id and job_id not in entry["job_ids"]:
+            entry["job_ids"].append(job_id)
+        if status and status not in entry["statuses"]:
+            entry["statuses"].append(status)
+        if detail and detail not in entry["details"]:
+            entry["details"].append(detail)
+        if retryable is True:
+            entry["retryable"] = True
+
+    for note in papers:
+        review_state = str(note.frontmatter.get("review_state", ""))
+        quality = paper_quality_state(note)
+        if review_state in {"needs_review", "agent_draft", "quality_failed"}:
+            add_exception("paper", note.rel_path, review_state)
+        if quality == "failed":
+            quality_data = kb_build_data(note).get("quality")
+            failed_checks = as_string_list(quality_data.get("failed_checks")) if isinstance(quality_data, dict) else []
+            add_exception("paper", note.rel_path, "quality_failed", "; ".join(failed_checks))
+    for failure in job_failures:
+        detail = as_string(failure["last_error"])
+        attempt_detail = f"attempt {failure['attempts']}/{failure['max_attempts']}"
+        add_exception(
+            str(failure["kind"]),
+            str(failure["path"]),
+            str(failure["status"]),
+            "; ".join(part for part in [attempt_detail, detail] if part),
+            str(failure["job_id"]),
+            bool(failure["retryable"]),
+        )
+    attention_notes = sorted(exceptions_by_identity.values(), key=lambda item: (str(item["kind"]), str(item["path"]), str(item["identity"])))
+    retryable_failures = [record for record in job_failures if record["retryable"]]
+    terminal_failures = [record for record in job_failures if not record["retryable"]]
+    passed_for_audit = [note for note in papers if paper_quality_state(note) == "passed"]
+    audit_sample = sorted(
+        passed_for_audit,
+        key=lambda note: hashlib.sha256(
+            str(note.frontmatter.get("pdf_sha256", "") or note.rel_path).encode("utf-8")
+        ).hexdigest(),
+    )[: min(8, len(passed_for_audit))]
+    paper_job_blockers = sum(value for status, value in paper_jobs.items() if status in WORK_IN_PROGRESS_JOB_STATUSES)
+    curator_job_blockers = sum(value for status, value in curator_jobs.items() if status in WORK_IN_PROGRESS_JOB_STATUSES)
+    if paper_job_blockers or curator_job_blockers or retryable_failures or any(item.severity == "error" for item in issues):
+        workflow_state = "build_incomplete"
+    elif terminal_failures or attention_notes:
+        workflow_state = "researcher_attention_needed"
+    else:
+        workflow_state = "ready_for_researcher_spot_check"
     return {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
@@ -5702,14 +5830,15 @@ def build_report(root: Path) -> dict[str, Any]:
         "metadata_reconciliation": metadata,
         "paper_jobs": paper_jobs,
         "curator_jobs": curator_jobs,
-        "next_job_command": next_job_command(paper_jobs, curator_jobs),
+        "retryable_failures": retryable_failures,
+        "terminal_exceptions": terminal_failures,
+        "next_job_command": next_job_command(paper_job_ledger, curator_job_ledger),
+        "workflow_state": workflow_state,
+        "researcher_spot_check": [note.rel_path for note in audit_sample],
+        "researcher_spot_check_guidance": "Read this small, deterministic sample of quality-passed notes and inspect the cited anchors in their PDFs; use the exception list for anything else.",
         "lint_errors": sum(1 for item in issues if item.severity == "error"),
         "lint_warnings": sum(1 for item in issues if item.severity == "warn"),
-        "needs_user_review": [
-            note.rel_path
-            for note in papers
-            if str(note.frontmatter.get("review_state", "")) in {"needs_review", "agent_draft", "quality_failed"}
-        ],
+        "needs_user_review": attention_notes,
     }
 
 
@@ -5733,16 +5862,31 @@ def command_build_report(args: argparse.Namespace) -> int:
     print(f"- Invalid/stale candidates: {metadata.get('invalid_candidates', 0)}")
     print(f"- Paper jobs: {report['paper_jobs']}")
     print(f"- Curator jobs: {report['curator_jobs']}")
+    print(f"- Workflow state: {report['workflow_state']}")
     print(f"- Next job command: {report['next_job_command']}")
     print(f"- Lint errors: {report['lint_errors']}")
     print(f"- Lint warnings: {report['lint_warnings']}")
-    if report["quality_failed_notes"]:
-        print("\n## Quality Failed\n")
-        for path in report["quality_failed_notes"]:
-            print(f"- {path}")
+    if report["retryable_failures"]:
+        print(f"\n## Retryable Job Failures ({len(report['retryable_failures'])})\n")
+        for item in report["retryable_failures"][:10]:
+            location = item["path"] or item["job_id"]
+            print(f"- {item['kind']} {location}: {item['status']} ({item['attempts']}/{item['max_attempts']}); {item['last_error'] or 'no error detail recorded'}")
+        if len(report["retryable_failures"]) > 10:
+            print(f"- … and {len(report['retryable_failures']) - 10} more (see --json for the complete list).")
     if report["needs_user_review"]:
-        print("\n## Needs User Review\n")
-        for path in report["needs_user_review"]:
+        print(f"\n## Exceptions To Review ({len(report['needs_user_review'])})\n")
+        for item in report["needs_user_review"][:10]:
+            location = item["path"] or item["identity"]
+            statuses = ", ".join(item["statuses"])
+            details = "; ".join(item["details"])
+            suffix = f"; {details}" if details else ""
+            print(f"- {item['kind']} {location}: {statuses}{suffix}")
+        if len(report["needs_user_review"]) > 10:
+            print(f"- … and {len(report['needs_user_review']) - 10} more (see --json for the complete list).")
+    if report["researcher_spot_check"]:
+        print("\n## Researcher Spot Check\n")
+        print("Read this small sample of quality-passed notes and verify their evidence anchors in the PDFs. You do not need to read every note unless it appears in the exceptions list.")
+        for path in report["researcher_spot_check"]:
             print(f"- {path}")
     return 0
 
