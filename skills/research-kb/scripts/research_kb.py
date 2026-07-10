@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 import unicodedata
 import urllib.error
@@ -5159,7 +5160,7 @@ def command_migrate(args: argparse.Namespace) -> int:
         raise ValueError("migration source must be an existing vault, not the installed skill directory")
     if source == destination or source in destination.parents or destination in source.parents:
         raise ValueError("migration source and destination must be separate, non-nested directories")
-    if destination.exists() and any(destination.iterdir()):
+    if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError("migration destination must be empty or not exist; existing vaults are never overwritten")
 
     plan = migration_plan(source, destination)
@@ -5175,29 +5176,37 @@ def command_migrate(args: argparse.Namespace) -> int:
             print("Run again with --apply to create the new vault.")
         return 0
 
-    ensure_dir(destination)
-    skipped_symlinks: list[str] = []
-    preserved_legacy_scaffold: list[str] = []
-    legacy = is_legacy_package_vault(source)
-    for item in migration_sources(source):
-        target = destination / item.name
-        if legacy and item.name in {"AGENTS.md", "index.md", "log.md"}:
-            target = destination / "archive" / "migration" / f"legacy-{item.name}"
-            preserved_legacy_scaffold.append(item.name)
-        copy_migration_item(item, target, skipped_symlinks)
-    initialized = init_vault(destination)
-    update_index(destination)
-    report = {
-        **plan,
-        "applied_at": utc_timestamp(),
-        "initialized": initialized,
-        "skipped_symlinks": skipped_symlinks,
-        "preserved_legacy_scaffold": preserved_legacy_scaffold,
-    }
-    report_path = destination / MACHINE_DIR / "reports" / "migration-report.json"
-    ensure_dir(report_path.parent)
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
-    append_log(destination, f"Migrated vault content from `{source}` without changing the source folder.")
+    ensure_dir(destination.parent)
+    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.migration-", dir=destination.parent))
+    try:
+        skipped_symlinks: list[str] = []
+        preserved_legacy_scaffold: list[str] = []
+        legacy = is_legacy_package_vault(source)
+        for item in migration_sources(source):
+            target = staging / item.name
+            if legacy and item.name in {"AGENTS.md", "index.md", "log.md"}:
+                target = staging / "archive" / "migration" / f"legacy-{item.name}"
+                preserved_legacy_scaffold.append(item.name)
+            copy_migration_item(item, target, skipped_symlinks)
+        initialized = init_vault(staging)
+        update_index(staging)
+        report = {
+            **plan,
+            "applied_at": utc_timestamp(),
+            "initialized": initialized,
+            "skipped_symlinks": skipped_symlinks,
+            "preserved_legacy_scaffold": preserved_legacy_scaffold,
+        }
+        report_path = staging / MACHINE_DIR / "reports" / "migration-report.json"
+        ensure_dir(report_path.parent)
+        report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+        append_log(staging, f"Migrated vault content from `{source}` without changing the source folder.")
+        if destination.exists():
+            destination.rmdir()
+        os.replace(staging, destination)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     print(f"Migrated {len(plan['items_to_copy'])} vault item(s) to {destination}.")
     print("The source folder was not changed.")
     print(f"Wrote {rel_to(report_path, destination)}")

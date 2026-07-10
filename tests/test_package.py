@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -23,6 +27,15 @@ def run_cli(skill: Path, *args: str, cwd: Path | None = None) -> subprocess.Comp
         capture_output=True,
         check=False,
     )
+
+
+def load_cli_module():
+    spec = importlib.util.spec_from_file_location("research_kb_test_module", CLI)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class PackageTests(unittest.TestCase):
@@ -127,6 +140,23 @@ class PackageTests(unittest.TestCase):
             result = run_cli(SKILL, "--vault", str(destination), "migrate", "--source", str(source), "--apply")
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual((destination / "keep.md").read_text(encoding="utf-8"), "do not overwrite")
+
+    def test_migration_cleans_staging_after_a_copy_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            source = temp_path / "source"
+            destination = temp_path / "destination"
+            source.mkdir()
+            (source / "papers").mkdir()
+            module = load_cli_module()
+            args = SimpleNamespace(source=str(source), vault=str(destination), apply=True, json=False)
+
+            with patch.object(module, "copy_migration_item", side_effect=OSError("forced copy failure")):
+                with self.assertRaisesRegex(OSError, "forced copy failure"):
+                    module.command_migrate(args)
+
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(temp_path.glob(".destination.migration-*")), [])
 
     def test_default_worker_globs_match_job_export_paths(self) -> None:
         paper_agent = (SKILL / "agents" / "paper-process.yaml").read_text(encoding="utf-8")

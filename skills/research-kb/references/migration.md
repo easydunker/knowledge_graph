@@ -31,6 +31,9 @@ commands or edit configuration.
   files so stale package links and rules do not become the active vault setup.
 - The destination must be empty and must not nest inside the source. This
   prevents accidental merging or recursive copies.
+- Migration first writes to a temporary sibling folder and publishes it only
+  after copying, initialization, indexing, and reporting succeed. A failure
+  removes that staging folder and leaves the destination unchanged.
 - The source is never changed. The copied destination and the original source
   together provide the recovery path; migration also writes
   `.research-kb/reports/migration-report.json` in the new vault.
