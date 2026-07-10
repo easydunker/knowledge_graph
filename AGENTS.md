@@ -8,3 +8,5 @@
   contract when changing the CLI.
 - Update tests whenever the installation, migration, task-path, or scaffold
   contract changes.
+- When writing a squash-and-merge commit summary, include the trailer
+  `Co-authored-by: Codex <noreply@openai.com>`.
