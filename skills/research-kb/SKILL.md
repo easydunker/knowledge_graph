@@ -76,13 +76,13 @@ For quota-constrained Codex runs, replace steps 1-8 with the job-aware commands:
 
 ### Completion Contract For A Full Build
 
-When the user asks to build or update a KB, the harness owns the queue. Do not stop after `process`, `enrich`, applying a single batch, or creating candidate nodes. For a batch of roughly 60 papers, use bounded paper batches (normally 5 to 10) and repeat this cycle until the paper ledger has no work-in-progress jobs (`pending`, `exported`, `running`, `result_written`, or `applied`). A failed or quality-failed job is an explicit exception, never successful completion:
+When the user asks to build or update a KB, the harness owns the queue. Do not stop after `process`, `enrich`, applying a single batch, or creating candidate nodes. For a batch of roughly 60 papers, use bounded paper batches (normally 5 to 10) and repeat this cycle until the paper ledger has no work-in-progress jobs (`pending`, `retry_pending`, `exported`, `running`, `result_written`, or `applied`). A failed or quality-failed job is an explicit exception, never successful completion:
 
 1. `process`, then `build-jobs refresh` and `build-jobs status`.
 2. Export the next paper batch, delegate every exported task, and apply its returned results.
 3. If a result fails validation or quality, retry that specific paper once with the failure report in its worker instructions. Keep any paper that still fails in the exception list; never silently treat it as complete or use it for curation.
 4. Reconcile metadata after the paper queue is terminal.
-5. Export, delegate, and apply curator batches until the curator ledger has no unfinished or failed jobs. Curators must receive only quality-passed paper evidence.
+5. Export, delegate, and apply curator batches until the curator ledger has no unfinished jobs. A curator failure that has exhausted its retries belongs in the exception list; curators must receive only quality-passed paper evidence.
 6. Run `lint`, `index`, and `build-report`. Report `ready_for_researcher_spot_check` only when both job ledgers are complete, lint has no errors, and no unresolved exception remains.
 
 If the harness cannot delegate workers, explain that paper understanding is not yet running and ask for permission or a configured model runner; deterministic node creation is not an acceptable substitute for populated paper or graph notes.

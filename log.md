@@ -19,3 +19,4 @@ Record important ingest, review, synthesis, and cleanup actions here.
 - Added an end-to-end, researcher-facing build contract so a harness must finish paper processing and node curation before calling a KB build complete; documented the small final spot-check and exception workflow for non-technical researchers.
 - Made curation accept only quality-passed paper notes as evidence, added one automatic retry allowance to new paper jobs, and made build status recommend retrying failed jobs.
 - Updated build reports with an explicit workflow state, concise exception output, and a deterministic sample of quality-passed notes for researcher audit.
+- Refined job failure reporting so retryable failures stay in the automated queue, while exhausted paper and curator jobs become deduplicated researcher-review exceptions with status and error details.
