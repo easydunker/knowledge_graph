@@ -1,0 +1,28 @@
+{
+  "name": "research-kb",
+  "version": "1.0.0",
+  "description": "Build and maintain source-grounded Obsidian research knowledge bases.",
+  "author": {
+    "name": "easydunker",
+    "url": "https://github.com/easydunker"
+  },
+  "homepage": "https://github.com/easydunker/knowledge_graph",
+  "repository": "https://github.com/easydunker/knowledge_graph",
+  "license": "MIT",
+  "keywords": ["research", "obsidian", "knowledge-base", "pdf"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Research KB",
+    "shortDescription": "Build a source-grounded Obsidian research KB",
+    "longDescription": "Create, migrate, and maintain a private, source-grounded research knowledge base from researcher-supplied PDFs.",
+    "developerName": "easydunker",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/easydunker/knowledge_graph",
+    "defaultPrompt": [
+      "Create a private Research KB from my PDFs.",
+      "Migrate my existing Research KB safely.",
+      "Build and review my Research KB."
+    ]
+  }
+}

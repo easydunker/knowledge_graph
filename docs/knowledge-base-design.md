@@ -503,13 +503,10 @@ research-kb/
   syntheses/
   templates/
 
-  plugins/
-    zotero/
-      library.bib
-      README.md
 ```
 
-The `plugins/zotero/` folder exists as a placeholder for a later optional integration; it is not required for v1.
+Zotero remains an optional integration. Do not create a Zotero folder or copy
+Zotero data until the researcher explicitly enables that integration.
 
 `index.md` is the human-facing Obsidian entry point. `.research-kb/index.json` is a generated machine cache for agents and CLI tools; it should be regenerated from Markdown notes rather than treated as the source of truth.
 

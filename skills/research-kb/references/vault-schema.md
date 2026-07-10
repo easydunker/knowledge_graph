@@ -30,12 +30,15 @@ communities/
 questions/
 syntheses/
 templates/
-plugins/zotero/
 ```
 
 `index.md` is the human-facing Obsidian entry point. `.research-kb/index.json` is a generated machine cache used by agents and CLI tools. `.research-kb/search/*.jsonl` is a generated probe index for large-vault search. The Markdown notes remain the source of truth.
 
 Vault-local `templates/*.md` files are researcher-overridable copies of the installed skill's canonical templates. Keep the standard headings unless intentionally changing the agent/indexing workflow.
+
+Zotero is not created by default. Add a separate optional integration only when
+the researcher explicitly enables it; its metadata must never replace reviewed
+Markdown content silently.
 
 ## Node Types
 

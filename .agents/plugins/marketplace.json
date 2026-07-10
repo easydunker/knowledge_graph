@@ -1,0 +1,21 @@
+{
+  "name": "research-kb",
+  "interface": {
+    "displayName": "Research KB"
+  },
+  "plugins": [
+    {
+      "name": "research-kb",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/easydunker/knowledge_graph.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
